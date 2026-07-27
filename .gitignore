@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+!.env.example
+venv/
+instance/
+.coverage
+htmlcov/
+dist/
+build/
+*.sqlite3
+
+# Binaries & Scratch
+cloudflared.exe
+scratch/
+*.log
+
+# PDPA Sensitive Data Protection (DO NOT PUSH TO GITHUB)
+datatest/
+*.jpg
+*.jpeg
+*.png
+!app/static/*

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.*
+!.env.example
+venv/
+.git
+.gitignore
+cloudflared.exe
+scratch/
+datatest/
+*.log

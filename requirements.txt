@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+aiomysql
+cryptography
+pillow
+opencv-python-headless
+pytesseract
+python-dotenv
+python-multipart
+aiohttp
+deepface
+numpy
+tf-keras
