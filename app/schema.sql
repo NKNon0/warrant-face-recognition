@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS face_profiles (
 CREATE TABLE IF NOT EXISTS license_plates (
   id INT AUTO_INCREMENT PRIMARY KEY,
   plate_text VARCHAR(255) NOT NULL,
+  province VARCHAR(100),
+  detail TEXT,
+  station VARCHAR(255),
+  category VARCHAR(100),
   plate_image_url VARCHAR(500),
   metadata JSON,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

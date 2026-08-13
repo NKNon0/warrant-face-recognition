@@ -235,10 +235,11 @@ async def run_import(datadir: str):
 
 
 if __name__ == "__main__":
+    default_dir = "datatest/FACE" if os.path.exists("datatest/FACE") else "datatest"
     parser = argparse.ArgumentParser(description="Bulk import persons from datatest folder")
     parser.add_argument(
         "--datadir",
-        default="datatest",
+        default=default_dir,
         help="Path to datatest directory",
     )
     args = parser.parse_args()

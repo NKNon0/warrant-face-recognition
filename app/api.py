@@ -3,6 +3,7 @@ import json
 import hmac
 import hashlib
 from urllib.parse import parse_qsl
+from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, Form, Header, HTTPException
 from app.db import get_connection
 from app.ai_processor import process_media
@@ -43,19 +44,39 @@ async def upload_file_from_miniapp(
     if x_telegram_init_data:
         user_info = verify_telegram_init_data(x_telegram_init_data)
 
+    ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
     user_db_id = None
     if user_info:
         telegram_id = user_info.get("id")
+        username = user_info.get("username", "")
+        first_name = user_info.get("first_name", "")
+        is_admin = (ADMIN_TELEGRAM_ID and telegram_id == ADMIN_TELEGRAM_ID)
+
         async with await get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute("SELECT * FROM users WHERE telegram_id = %s", (telegram_id,))
                 row = await cur.fetchone()
-                if row and not row.get("is_authorized"):
-                    raise HTTPException(status_code=403, detail="คุณยังไม่ได้รับการอนุมัติสิทธิ์การใช้งาน")
-                if row:
+                if not row:
+                    role = 'admin' if is_admin else 'police'
+                    await cur.execute(
+                        "INSERT INTO users (telegram_id, username, first_name, is_authorized, role) VALUES (%s, %s, %s, 1, %s)",
+                        (telegram_id, username, first_name, role)
+                    )
+                    user_db_id = cur.lastrowid
+                else:
+                    if is_admin and not row.get("is_authorized"):
+                        await cur.execute("UPDATE users SET is_authorized = 1 WHERE id = %s", (row["id"],))
                     user_db_id = row["id"]
 
     image_bytes = await file.read()
+
+    # บันทึกไฟล์รูปถ่ายสดที่ถ่ายส่งเข้ามาลงโฟลเดอร์ uploads
+    uploads_dir = os.path.join(os.getcwd(), "uploads")
+    os.makedirs(uploads_dir, exist_ok=True)
+    captured_filename = f"captured_{int(datetime.now().timestamp())}_{file.filename or 'scan.jpg'}"
+    captured_path = os.path.join(uploads_dir, captured_filename)
+    with open(captured_path, "wb") as f:
+        f.write(image_bytes)
 
     # บันทึก media_request ชั่วคราว
     request_id = None
@@ -68,6 +89,11 @@ async def upload_file_from_miniapp(
             request_id = cur.lastrowid
 
     result = await process_media(request_id, image_bytes, mode=mode)
+
+    # แนบไฟล์ภาพถ่ายสดที่ถ่ายจากมือถือเข้าในผลลัพธ์
+    if isinstance(result, dict) and result.get("found") and result.get("results"):
+        for res_item in result["results"]:
+            res_item["captured_photo_url"] = captured_path
 
     async with await get_connection() as conn:
         async with conn.cursor() as cur:
@@ -92,7 +118,6 @@ async def send_result_to_chat(
     x_telegram_init_data: str = Header(None, alias="X-Telegram-Init-Data"),
 ):
     from app.telegram_bot import send_message, send_photo, format_face_result, ADMIN_TELEGRAM_ID
-    from datetime import datetime
 
     target_chat_id = req.chat_id
     if x_telegram_init_data:
@@ -111,18 +136,43 @@ async def send_result_to_chat(
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # กำหนดไฟล์ภาพถ่ายสด หรือไฟล์ภาพประวัติในฐานข้อมูล
+    photo_path = res_data.get("captured_photo_url") or res_data.get("photo_url")
+
     if res_type == "face":
         caption = (
-            f"🚨 <b>ผลการสแกนตรวจสอบหมายจับจาก Mini App</b> 📱\n\n"
+            f"🚨 <b>ผลการสแกนตรวจพบหมายจับจาก Mini App</b> 📱\n\n"
             + format_face_result(res_data, now_str)
         )
-        photo_path = res_data.get("photo_url")
-        if photo_path and os.path.exists(photo_path):
-            await send_photo(target_chat_id, photo_path, caption)
-        else:
-            await send_message(target_chat_id, caption)
+    elif res_type == "plate":
+        caption = (
+            f"🚨 <b>ผลการสแกนตรวจพบป้ายทะเบียนเฝ้าระวัง!</b> 🚗\n\n"
+            f"🚗 <b>ป้ายทะเบียน:</b> {res_data.get('plate_text', '-')}\n"
+            f"📍 <b>จังหวัด:</b> {res_data.get('province', '-')}\n"
+            f"🚨 <b>หมวดหมู่:</b> {res_data.get('category', '-')}\n"
+            f"📋 <b>รายละเอียดข้อหา:</b> {res_data.get('detail', '-')}\n"
+            f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {res_data.get('station', '-')}\n"
+            f"🎯 <b>ความถูกต้อง:</b> {res_data.get('score', 95):.2f}%\n"
+            f"🕐 <b>เวลาที่สแกน:</b> {now_str}"
+        )
+    elif res_type == "id_card":
+        caption = (
+            f"🚨 <b>ผลการสแกนตรวจพบบัตรประชาชนเป้าหมาย!</b> 🪪\n\n"
+            f"👤 <b>ชื่อ-สกุล:</b> {res_data.get('person_name') or res_data.get('name') or '-'}\n"
+            f"🪪 <b>เลขบัตรประชาชน:</b> {res_data.get('id_number', '-')}\n"
+            f"📋 <b>รายละเอียดข้อหา:</b> {res_data.get('detail', '-')}\n"
+            f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {res_data.get('station', '-')}\n"
+            f"⚖️ <b>ศาลที่ออกหมายจับ:</b> {res_data.get('court', '-')}\n"
+            f"🎯 <b>ความถูกต้อง:</b> {res_data.get('score', 99):.2f}%\n"
+            f"🕐 <b>เวลาที่สแกน:</b> {now_str}"
+        )
     else:
-        caption = f"📱 <b>ผลการตรวจสอบจาก Mini App:</b>\n\n<code>{json.dumps(res_data, ensure_ascii=False, indent=2)}</code>"
+        caption = f"📱 <b>ผลการสแกนจาก Mini App ({now_str}):</b>\n\n{res_data}"
+
+    # ส่งไฟล์รูปถ่ายพร้อมคำอธิบายแบบสวยงามเข้า Telegram Chat
+    if photo_path and os.path.exists(photo_path):
+        await send_photo(target_chat_id, photo_path, caption)
+    else:
         await send_message(target_chat_id, caption)
 
     return {"ok": True, "message": "ส่งข้อมูลเข้าแชทบอทสำเร็จ!"}

@@ -8,6 +8,8 @@ pytesseract
 python-dotenv
 python-multipart
 aiohttp
-deepface
-numpy
-tf-keras
+insightface
+onnxruntime
+ultralytics
+paddlepaddle
+paddleocr

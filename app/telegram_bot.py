@@ -109,10 +109,25 @@ async def set_user_authorization(telegram_id: int, is_authorized: bool):
             )
 
 
+def get_base_url() -> str:
+    url = (os.getenv("WEBAPP_URL") or "http://127.0.0.1:8000").strip().rstrip("/")
+    if url.endswith("/static/index.html"):
+        url = url[:-len("/static/index.html")]
+    elif url.endswith("/static"):
+        url = url[:-len("/static")]
+    return url
+
+
+def get_miniapp_url() -> str:
+    base = get_base_url()
+    return f"{base}/static/index.html"
+
+
 async def set_telegram_webhook():
     """ลงทะเบียน Webhook URL กับ Telegram API เพื่อรับข้อความและคำสั่ง /start"""
-    if WEBAPP_URL.startswith("https://"):
-        webhook_url = f"{WEBAPP_URL}/telegram-webhook"
+    base = get_base_url()
+    if base.startswith("https://"):
+        webhook_url = f"{base}/telegram-webhook"
         url = f"{TELEGRAM_API}/setWebhook"
         payload = {"url": webhook_url}
         try:
@@ -120,38 +135,47 @@ async def set_telegram_webhook():
                 async with session.post(url, json=payload) as resp:
                     res = await resp.json()
                     logger.info(f"setWebhook ({webhook_url}): {res}")
+                    print(f"[Telegram Bot] Webhook Registered: {webhook_url} -> {res}")
         except Exception as e:
             logger.error(f"setWebhook error: {e}")
 
 
-async def set_telegram_menu_button():
+async def set_telegram_menu_button(chat_id: int | None = None):
     """ตั้งค่าปุ่ม Mini App ตรงเมนูล่างซ้ายของ Telegram เป็นปุ่มหลักเพียงอันเดียว"""
-    if WEBAPP_URL.startswith("https://"):
+    base = get_base_url()
+    if base.startswith("https://"):
+        target_url = get_miniapp_url()
         url = f"{TELEGRAM_API}/setChatMenuButton"
         payload = {
             "menu_button": {
                 "type": "web_app",
-                "text": "📱 Mini App",
-                "web_app": {"url": WEBAPP_URL}
+                "text": "MiniApp",
+                "web_app": {"url": target_url}
             }
         }
+        if chat_id:
+            payload["chat_id"] = chat_id
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload) as resp:
-                    logger.info(f"setChatMenuButton: {await resp.json()}")
+                    res = await resp.json()
+                    logger.info(f"setChatMenuButton: {res}")
+                    print(f"[Telegram Bot] Menu Button Set ({target_url}): {res}")
         except Exception as e:
             logger.error(f"setChatMenuButton error: {e}")
 
 
 def build_authorized_keyboard() -> dict | None:
     """สร้าง Inline Keyboard ปุ่ม Mini App ปุ่มใหญ่ส่งไปในแชททันที"""
-    if WEBAPP_URL.startswith("https://"):
+    base = get_base_url()
+    if base.startswith("https://"):
+        target_url = get_miniapp_url()
         return {
             "inline_keyboard": [
                 [
                     {
-                        "text": "🚀 เปิดระบบสแกน Mini App (คลิกที่นี่)",
-                        "web_app": {"url": WEBAPP_URL}
+                        "text": "🚀 เปิดระบบสแกน MiniApp (คลิกที่นี่)",
+                        "web_app": {"url": target_url}
                     }
                 ]
             ]
@@ -248,6 +272,7 @@ async def handle_telegram_update(update: dict):
 
     # กรณีส่งคำสั่ง /start
     if text == "/start":
+        await set_telegram_menu_button(chat_id)
         if is_authorized:
             markup = build_authorized_keyboard()
             await send_message(
@@ -357,10 +382,25 @@ async def handle_telegram_update(update: dict):
                 await send_message(chat_id, caption)
 
         elif item.get("type") == "plate":
-            await send_message(chat_id, f"🚗 พบป้ายทะเบียน: <b>{item.get('plate_text')}</b>")
+            plate_msg = (
+                f"🚨 <b>ผลการตรวจพบป้ายทะเบียนเฝ้าระวัง!</b>\n"
+                f"🚗 <b>ป้ายทะเบียน:</b> {item.get('plate_text', '-')}\n"
+                f"📍 <b>จังหวัด:</b> {item.get('province', '-')}\n"
+                f"🚨 <b>หมวดหมู่:</b> {item.get('category', '-')}\n"
+                f"📋 <b>สาเหตุ/รายละเอียดข้อหา:</b> {item.get('detail', '-')}\n"
+                f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {item.get('station', '-')}\n"
+                f"🎯 <b>ความถูกต้อง:</b> {item.get('score', 95):.2f}%"
+            )
+            await send_message(chat_id, plate_msg)
 
         elif item.get("type") == "id_card":
-            await send_message(
-                chat_id,
-                f"🪪 พบบัตรประชาชน\n👤 ชื่อ: <b>{item.get('name', '-')}</b>\n🔢 เลข: {item.get('id_number', '-')}",
+            id_msg = (
+                f"🚨 <b>ผลการตรวจพบบัตรประชาชนเป้าหมาย!</b>\n"
+                f"👤 <b>ชื่อ-สกุล:</b> {item.get('person_name') or item.get('name') or '-'}\n"
+                f"🪪 <b>เลขบัตรประชาชน:</b> {item.get('id_number', '-')}\n"
+                f"📋 <b>รายละเอียดข้อหา:</b> {item.get('detail', '-')}\n"
+                f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {item.get('station', '-')}\n"
+                f"⚖️ <b>ศาลที่ออกหมายจับ:</b> {item.get('court', '-')}\n"
+                f"🎯 <b>ความคล้าย:</b> {item.get('score', 99):.2f}%"
             )
+            await send_message(chat_id, id_msg)
