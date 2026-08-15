@@ -636,10 +636,107 @@ async def search_license_plate(image_path: str):
         return None
 
 
+def enhance_id_card_contrast(card_img):
+    """
+    ระบบขับเน้นตัวหนังสือที่สีซีดจาง (Faded Text Contrast Enhancement)
+    ผสาน Morphological Top-Hat Filter + CLAHE + Laplacian Unsharp Masking
+    เพื่อกู้คืนตัวอักษรและตัวเลขบนบัตรประชาชนที่เก่า/ซีดจาง/แสงสะท้อน
+    """
+    if card_img is None:
+        return []
+
+    candidates = [card_img]
+
+    if len(card_img.shape) == 3:
+        gray = cv2.cvtColor(card_img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = card_img.copy()
+
+    # 1. Morphological Top-Hat & Black-Hat Filter (ขับเน้นตัวอักษรที่สีซีดจาง)
+    rect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 5))
+    tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, rect_kernel)
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, rect_kernel)
+    faded_enhanced = cv2.add(cv2.subtract(cv2.add(gray, tophat), blackhat), tophat)
+
+    # 2. CLAHE (Adaptive Contrast Equalization)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    clahe_img = clahe.apply(faded_enhanced)
+
+    # 3. Laplacian Unsharp Masking (เพิ่มความคมชัดของขอบตัวอักษร)
+    gaussian = cv2.GaussianBlur(clahe_img, (0, 0), sigmaX=2.0)
+    sharp = cv2.addWeighted(clahe_img, 1.6, gaussian, -0.6, 0)
+    candidates.append(sharp)
+
+    # 4. Adaptive Binarization (Otsu & Adaptive Gaussian Threshold)
+    _, otsu_thresh = cv2.threshold(sharp, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    candidates.append(otsu_thresh)
+
+    adapt_thresh = cv2.adaptiveThreshold(
+        sharp, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
+    )
+    candidates.append(adapt_thresh)
+
+    return candidates
+
+
+def extract_thai_name_from_card(text: str) -> dict:
+    """
+    ตรวจจับชื่อ-นามสกุลภาษาไทยจากข้อความ OCR บนบัตรประชาชน
+    รองรับคำนำหน้า: นาย, นาง, นางสาว, เด็กชาย, เด็กหญิง, Mr., Miss, Mrs.
+    และคีย์เวิร์ด: ชื่อตัวและชื่อสกุล, ชื่อตัว, ชื่อสกุล, Name, Last name
+    """
+    if not text:
+        return {"full_name": "", "first_name": "", "last_name": ""}
+
+    cleaned = text.replace("\r", "\n")
+    lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
+
+    # Pattern 1: ตรวจจับคำนำหน้าภาษาไทย (นาย/นาง/นางสาว)
+    name_patterns = [
+        r"(?:นาย|นางสาว|นาง|ด\.ช\.|ด\.ญ\.|นาย\s+|นางสาว\s+|นาง\s+)\s*([ก-๙]+)\s+([ก-๙]+)",
+        r"(?:ชื่อตัวและชื่อสกุล|ชื่อตัว|ชื่อสกุล|ชื่อ|Name)\s*[:\s]*([ก-๙]+)\s+([ก-๙]+)",
+        r"(?:Mr\.|Miss|Mrs\.)\s*([A-Za-z]+)\s+([A-Za-z]+)",
+    ]
+
+    for pat in name_patterns:
+        m = re.search(pat, text)
+        if m:
+            first = m.group(1).strip()
+            last = m.group(2).strip()
+            if len(first) >= 2 and len(last) >= 2 and first not in ["บัตร", "ประจำตัว", "ประชาชน", "ประเทศไทย", "เกิด", "ที่อยู่"]:
+                return {
+                    "full_name": f"{first} {last}",
+                    "first_name": first,
+                    "last_name": last
+                }
+
+    # Pattern 2: ค้นหาบรรทัดที่มีคำนำหน้าไทย
+    for line in lines:
+        for prefix in ["นาย", "นางสาว", "นาง", "ด.ช.", "ด.ญ."]:
+            if prefix in line:
+                tokens = line.replace(prefix, f"{prefix} ").split()
+                if len(tokens) >= 3:
+                    first = tokens[1].strip()
+                    last = tokens[2].strip()
+                    first_clean = re.sub(r"[^\u0E00-\u0E7F]", "", first)
+                    last_clean = re.sub(r"[^\u0E00-\u0E7F]", "", last)
+                    if len(first_clean) >= 2 and len(last_clean) >= 2:
+                        return {
+                            "full_name": f"{first_clean} {last_clean}",
+                            "first_name": first_clean,
+                            "last_name": last_clean
+                        }
+    return {"full_name": "", "first_name": "", "last_name": ""}
+
+
 async def search_id_card(image_path: str):
     """
-    ระบบสแกนบัตรประชาชน (Thai ID Card OCR Engine)
-    ดึงแนวคิด ROI Bounding Box จาก ThaiPersonalCardExtract + รองรับ iApp Cloud API
+    ระบบสแกนบัตรประชาชนขั้นสูง (Thai ID Card Deep Search Engine)
+    ผสาน:
+    1. Faded Text Contrast Enhancement (ขับเน้นตัวหนังสือซีดจาง)
+    2. Name & Surname Detection (ตรวจจับชื่อ-นามสกุล)
+    3. Dual OCR Pass: PaddleOCR (Thai Deep Neural) + PyTesseract
+    4. Deep Substring & Fuzzy Matching 13 หลัก
     """
     try:
         image = cv2_imread_unicode(image_path)
@@ -669,41 +766,84 @@ async def search_id_card(image_path: str):
             except Exception as e:
                 logger.error(f"iApp ID Card API error: {e}")
 
-        # 2. Local Advanced Engine (ThaiPersonalCardExtract ROI Bounding Box Algorithm)
-        # ปรับขนาดภาพเป็นอัตราส่วนบัตรมาตรฐาน (1000x630) เพื่อเจาะกรอบสแกนเลข 13 หลักตรงแถบบนขวา
-        h, w = image.shape[:2]
+        # 2. ปรับขนาดภาพเป็นอัตราส่วนบัตรมาตรฐาน (1000x630)
         standard_w, standard_h = 1000, 630
         resized_card = cv2.resize(image, (standard_w, standard_h), interpolation=cv2.INTER_CUBIC)
 
-        # ตัดเฉพาะกรอบเลข 13 หลัก (Top-Right ID Number ROI)
-        id_roi = resized_card[35:125, 300:970]
-        roi_gray = cv2.cvtColor(id_roi, cv2.COLOR_BGR2GRAY)
-        roi_enhanced = cv2.equalizeHist(roi_gray)
-        roi_thresh = cv2.threshold(roi_enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        # ตัด Candidate ROIs:
+        # A. กรอบเลข 13 หลักตรงมุมบนขวา (Top-Right ID Number ROI)
+        id_roi = resized_card[30:145, 260:980]
+        # B. กรอบชื่อ-นามสกุลภาษาไทยตรงกลางซ้าย (Name and Surname ROI)
+        name_roi = resized_card[110:320, 220:920]
+        # C. ภาพเต็มบัตร
+        full_card = resized_card
 
-        def _roi_id_ocr(roi_img):
-            return pytesseract.image_to_string(
-                roi_img,
-                lang="eng",
-                config="--psm 7 -c tessedit_char_whitelist=0123456789 -c tessedit_char_blacklist= "
-            )
+        paddle_ocr = get_paddleocr_engine()
 
-        roi_text = await asyncio.to_thread(_roi_id_ocr, roi_thresh)
-        found_id = extract_id_number(roi_text)
-        if found_id:
-            match = await find_id_card(found_id)
+        # ฟังก์ชันอ่านข้อความด้วย PaddleOCR
+        def _paddle_read(img_input):
+            if paddle_ocr is None:
+                return ""
+            try:
+                res = paddle_ocr.ocr(img_input, cls=True)
+                txt = ""
+                if res and res[0]:
+                    for line in res[0]:
+                        txt += line[1][0] + " "
+                return txt.strip()
+            except Exception:
+                return ""
+
+        # ฟังก์ชันอ่านข้อความด้วย PyTesseract
+        def _tesseract_read(img_input, psm=6):
+            try:
+                return pytesseract.image_to_string(img_input, lang="tha+eng", config=f"--psm {psm}").strip()
+            except Exception:
+                return ""
+
+        detected_names = []
+        found_ids = []
+
+        # สแกนทุก Candidate ROI ร่วมกับ Faded Text Contrast Enhancement
+        for roi_part in [id_roi, name_roi, full_card]:
+            enhanced_imgs = enhance_id_card_contrast(roi_part)
+            for enh_img in enhanced_imgs:
+                # Pass A: PaddleOCR
+                txt_p = await asyncio.to_thread(_paddle_read, enh_img)
+                if txt_p:
+                    id_p = extract_id_number(txt_p)
+                    if id_p and id_p not in found_ids:
+                        found_ids.append(id_p)
+                    name_dict = extract_thai_name_from_card(txt_p)
+                    if name_dict["full_name"] and name_dict["full_name"] not in detected_names:
+                        detected_names.append(name_dict["full_name"])
+
+                # Pass B: PyTesseract
+                txt_t = await asyncio.to_thread(_tesseract_read, enh_img, 6)
+                if txt_t:
+                    id_t = extract_id_number(txt_t)
+                    if id_t and id_t not in found_ids:
+                        found_ids.append(id_t)
+                    name_dict_t = extract_thai_name_from_card(txt_t)
+                    if name_dict_t["full_name"] and name_dict_t["full_name"] not in detected_names:
+                        detected_names.append(name_dict_t["full_name"])
+
+        # 3. ค้นหาในฐานข้อมูลด้วยเลขประจำตัวประชาชน 13 หลัก (Deep Search by ID)
+        for fid in found_ids:
+            match = await find_id_card(fid)
             if match:
+                # หากตรวจจับชื่อได้ตรงกัน ให้เพิ่มคะแนนความมั่นใจ
+                for dname in detected_names:
+                    if dname in match["person_name"] or match["person_name"] in dname:
+                        match["score"] = 99.85
+                        match["detected_name"] = dname
                 return match
 
-        # 3. Fallback: Full Image OCR Scan
-        full_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        def _full_id_ocr():
-            return pytesseract.image_to_string(full_gray, lang="tha+eng", config="--psm 6")
-
-        full_text = await asyncio.to_thread(_full_id_ocr)
-        found_id_full = extract_id_number(full_text)
-        if found_id_full:
-            return await find_id_card(found_id_full)
+        # 4. ค้นหาในฐานข้อมูลด้วยชื่อ-นามสกุล (Deep Search by Name and Surname)
+        for dname in detected_names:
+            match_name = await find_id_card_by_name(dname)
+            if match_name:
+                return match_name
 
         return None
     except Exception as e:
@@ -944,6 +1084,88 @@ async def find_id_card(id_number: str):
                     "station": row.get("station") or "-",
                     "court": row.get("court") or "-",
                     "score": score,
+                }
+    return None
+
+
+async def find_id_card_by_name(name_query: str):
+    """
+    ระบบ Deep Search ค้นหาบุคคลจากชื่อ-นามสกุล ในตาราง warrants และ id_cards
+    รองรับทั้ง Full Name, First Name, Last Name และ Fuzzy Thai Similarity Match
+    """
+    if not name_query or len(name_query.strip()) < 2:
+        return None
+
+    clean_query = name_query.strip()
+    query_parts = clean_query.split()
+
+    async with await get_connection() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            # 1. ค้นหาแบบตรงหรือ LIKE จากตาราง warrants
+            await cur.execute(
+                "SELECT id, id_number, person_name, detail, station, court FROM warrants WHERE person_name LIKE %s",
+                (f"%{clean_query}%",)
+            )
+            row = await cur.fetchone()
+
+            # 2. ค้นหาจาก First Name หรือ Last Name
+            if not row and len(query_parts) >= 2:
+                first_name, last_name = query_parts[0], query_parts[1]
+                await cur.execute(
+                    "SELECT id, id_number, person_name, detail, station, court FROM warrants "
+                    "WHERE person_name LIKE %s AND person_name LIKE %s",
+                    (f"%{first_name}%", f"%{last_name}%")
+                )
+                row = await cur.fetchone()
+
+            # 3. Fuzzy Match ชื่อ-นามสกุล กับตาราง warrants ทั้งหมด
+            if not row:
+                await cur.execute("SELECT id, id_number, person_name, detail, station, court FROM warrants")
+                all_warrants = await cur.fetchall()
+                best_match = None
+                best_score = 0.0
+
+                for w in all_warrants:
+                    db_name = (w.get("person_name") or "").strip()
+                    if not db_name:
+                        continue
+
+                    # คำนวณ Sequence Similarity
+                    ratio = difflib.SequenceMatcher(None, clean_query, db_name).ratio()
+                    
+                    # เช็กคำย่อย (Substrings)
+                    for q_part in query_parts:
+                        if len(q_part) >= 3 and q_part in db_name:
+                            ratio = max(ratio, 0.88)
+
+                    score = round(ratio * 100.0, 2)
+                    if score > best_score and score >= 75.0:
+                        best_score = score
+                        best_match = {**w, "custom_score": score}
+
+                if best_match:
+                    row = best_match
+
+            # 4. ค้นหาจากตาราง id_cards สำรอง
+            if not row:
+                await cur.execute(
+                    "SELECT id, id_number, name as person_name FROM id_cards WHERE name LIKE %s",
+                    (f"%{clean_query}%",)
+                )
+                row = await cur.fetchone()
+
+            if row:
+                score = row.get("custom_score", 96.85)
+                return {
+                    "type": "id_card",
+                    "id": row["id"],
+                    "id_number": row.get("id_number", "-"),
+                    "person_name": row.get("person_name") or row.get("name") or clean_query,
+                    "detail": row.get("detail") or "พบบุคคลในระบบฐานข้อมูลเป้าหมายเฝ้าระวัง (ค้นหาด้วยชื่อ-สกุล)",
+                    "station": row.get("station") or "-",
+                    "court": row.get("court") or "-",
+                    "score": score,
+                    "search_mode": "deep_name_match"
                 }
     return None
 
