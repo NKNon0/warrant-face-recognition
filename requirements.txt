@@ -13,3 +13,4 @@ onnxruntime
 ultralytics
 paddlepaddle
 paddleocr
+qdrant-client

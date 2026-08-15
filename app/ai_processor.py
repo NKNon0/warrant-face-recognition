@@ -858,6 +858,27 @@ async def find_best_face_match(embedding) -> dict | None:
         return None
     emb_normalized = emb / norm_emb
 
+    # 1. Pass 1: High-Performance Vector DB Search (Qdrant HNSW Indexing - Sub-millisecond)
+    try:
+        from app.vector_db import search_face_vector
+        q_match = search_face_vector(emb_normalized.tolist(), score_threshold=0.70)
+        if q_match:
+            return {
+                "type": "face",
+                "id": q_match["id"],
+                "person_name": q_match["person_name"],
+                "id_number": q_match["id_number"],
+                "detail": q_match["detail"],
+                "station": q_match["station"],
+                "court": q_match["court"],
+                "photo_url": q_match["photo_url"],
+                "score": q_match["score"],
+                "match_time": None,
+            }
+    except Exception as e:
+        logger.debug(f"[Vector DB] Qdrant pass bypassed: {e}")
+
+    # 2. Pass 2: MySQL Direct Cosine Similarity Search (Fallback)
     async with await get_connection() as conn:
         async with conn.cursor(aiomysql.DictCursor) as cur:
             await cur.execute(
