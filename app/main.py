@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from app.telegram_bot import handle_telegram_update, set_telegram_menu_button, set_telegram_webhook
+from app.telegram_bot import handle_telegram_update
 from app.db import init_db
 from app.api import router as api_router
 
@@ -17,7 +17,7 @@ app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return FileResponse(STATIC_DIR / "index.html")
+    return {"status": "online", "service": "Warrant AI Recognition Direct Bot"}
 
 async def auto_train_datasets_on_startup():
     """
@@ -25,8 +25,6 @@ async def auto_train_datasets_on_startup():
     (Auto-Train & Ingest All 3 Datasets on Server Startup)
     """
     try:
-        from import_license_plates import run_import as import_plates
-        from import_thai_id_ocr import import_all_thai_id_ocr
         from scratch.master_train_all_ai import master_train
 
         print("[Auto-Train] Starting background AI dataset training & vector sync...")
@@ -38,8 +36,6 @@ async def auto_train_datasets_on_startup():
 @app.on_event("startup")
 async def startup_event():
     await init_db()
-    await set_telegram_menu_button()
-    await set_telegram_webhook()
     # เรียกทำงาน Auto-Train AI อัตโนมัติทุกครั้งที่เปิดเซิร์ฟเวอร์
     asyncio.create_task(auto_train_datasets_on_startup())
 

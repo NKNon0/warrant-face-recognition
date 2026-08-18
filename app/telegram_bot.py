@@ -118,6 +118,19 @@ def get_base_url() -> str:
     return url
 
 
+async def remove_telegram_menu_button(chat_id: int | None = None):
+    """ลบปุ่ม Mini App และคืนค่า Menu Button เป็น default"""
+    url = f"{TELEGRAM_API}/setChatMenuButton"
+    payload = {"menu_button": {"type": "default"}}
+    if chat_id:
+        payload["chat_id"] = chat_id
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, json=payload)
+    except Exception as e:
+        logger.error(f"remove_telegram_menu_button error: {e}")
+
+
 def format_face_result(result: dict, detected_at: str) -> str:
     """สร้างข้อความผลลัพธ์การตรวจพบใบหน้า"""
     score = result.get("score", 0.0)
@@ -205,6 +218,7 @@ async def handle_telegram_update(update: dict):
 
     # กรณีส่งคำสั่ง /start หรือ /help
     if text in ["/start", "/help"]:
+        await remove_telegram_menu_button(chat_id)
         if is_authorized:
             welcome_msg = (
                 f"👮‍♂️ สวัสดีครับ <b>{first_name}</b>!\n"
