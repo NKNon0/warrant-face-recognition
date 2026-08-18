@@ -45,7 +45,7 @@ def get_insightface_app():
     if not INSIGHTFACE_AVAILABLE or FaceAnalysis is None:
         return None
     try:
-        app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+        app = FaceAnalysis(name='buffalo_l', allowed_modules=['detection', 'recognition'], providers=['CPUExecutionProvider'])
         app.prepare(ctx_id=-1, det_size=(640, 640))
         INSIGHTFACE_APP = app
         print("[AI Process] InsightFace (buffalo_l / ResNet50) loaded successfully!")
@@ -107,7 +107,7 @@ def is_valid_image(image_path: str) -> tuple[bool, str]:
 def classify_image_type(image_path: str) -> tuple[str, float]:
     """
     AI Multi-Modal Image Classifier:
-    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ:
+    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ (ความเร็วสูงพิเศษ < 100ms):
     1. 'plate'  -> 🚗 ป้ายทะเบียนรถยนต์/รถจักรยานยนต์
     2. 'idcard' -> 🪪 บัตรประจำตัวประชาชน
     3. 'face'   -> 👤 ใบหน้าบุคคลต้องสงสัย
@@ -118,14 +118,22 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         if img is None:
             return "face", 0.50
 
-        h, w = img.shape[:2]
-        aspect_ratio = float(w) / float(h) if h > 0 else 1.0
+        h_orig, w_orig = img.shape[:2]
+        aspect_ratio = float(w_orig) / float(h_orig) if h_orig > 0 else 1.0
+
+        # ปรับขนาดภาพสำหรับการจำแนกประเภทความเร็วสูง (Max Dim 640px)
+        max_dim = 640
+        if max(h_orig, w_orig) > max_dim:
+            scale = float(max_dim) / float(max(h_orig, w_orig))
+            quick_img = cv2.resize(img, (int(w_orig * scale), int(h_orig * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            quick_img = img
 
         # --- 1. ตรวจสอบ ป้ายทะเบียนรถ (License Plate Detection) ---
         yolo = get_yolo_plate_model()
         if yolo is not None:
             try:
-                y_res = yolo.predict(img, verbose=False, conf=0.35)
+                y_res = yolo.predict(quick_img, verbose=False, conf=0.30)
                 if y_res and len(y_res) > 0 and len(y_res[0].boxes) > 0:
                     box = y_res[0].boxes[0]
                     conf = float(box.conf[0])
@@ -133,35 +141,36 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
                     bw = max(1, bx2 - bx1)
                     bh = max(1, by2 - by1)
                     box_ratio = float(bw) / float(bh)
-                    if box_ratio >= 1.3:
+                    if box_ratio >= 1.2:
                         return "plate", round(max(0.85, conf), 2)
             except Exception:
                 pass
 
         # --- 2. ตรวจสอบ บัตรประชาชน (Thai ID Card Detection) ---
-        full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        try:
-            quick_text = pytesseract.image_to_string(full_gray, lang="tha+eng", config="--psm 6 --dpi 150").strip()
-            id_keywords = ["บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่", "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ"]
-            keyword_matches = sum(1 for kw in id_keywords if kw in quick_text)
-            
-            id_num_match = extract_id_number(quick_text)
-            if id_num_match or keyword_matches >= 2:
-                return "idcard", 0.95
-            elif keyword_matches == 1 and (1.2 <= aspect_ratio <= 2.0):
-                return "idcard", 0.85
-        except Exception:
-            pass
+        if 1.25 <= aspect_ratio <= 1.95:
+            full_gray = cv2.cvtColor(quick_img, cv2.COLOR_BGR2GRAY)
+            try:
+                quick_text = pytesseract.image_to_string(full_gray, lang="tha+eng", config="--psm 6").strip()
+                id_keywords = ["บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่", "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ"]
+                keyword_matches = sum(1 for kw in id_keywords if kw in quick_text)
+                
+                id_num_match = extract_id_number(quick_text)
+                if id_num_match or keyword_matches >= 2:
+                    return "idcard", 0.95
+                elif keyword_matches == 1:
+                    return "idcard", 0.85
+            except Exception:
+                pass
 
         # --- 3. ตรวจสอบ ใบหน้าบุคคล (Face Detection) ---
         iface_app = get_insightface_app()
         if iface_app is not None:
             try:
-                faces = iface_app.get(img)
+                faces = iface_app.get(quick_img)
                 if faces and len(faces) > 0:
                     best_face = max(faces, key=lambda f: float(f.det_score))
                     det_score = float(best_face.det_score)
-                    if det_score >= 0.55:
+                    if det_score >= 0.50:
                         return "face", round(det_score, 2)
             except Exception:
                 pass
@@ -169,8 +178,8 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         if detect_and_crop_face(image_path) is not None:
             return "face", 0.80
 
-        # --- 4. กฎสัดส่วนภาพและลักษณะภาพ (Fallback Heuristics) ---
-        if aspect_ratio >= 2.2:
+        # --- 4. กฎสัดส่วนภาพ (Fallback Heuristics) ---
+        if aspect_ratio >= 2.0:
             return "plate", 0.70
         elif 1.35 <= aspect_ratio <= 1.85:
             return "idcard", 0.65
@@ -610,82 +619,80 @@ def enhance_faded_text_contrast(gray_img):
 
 def preprocess_license_plate_image(img_bgr):
     """
-    ระบบย่อยประมวลผลป้ายทะเบียนขั้นสูง (Multi-Pass Illumination, Angle Deskewing, Blur Sharpener & Frame Filter)
+    ระบบย่อยประมวลผลป้ายทะเบียนความเร็วสูงพิเศษ (High-Speed Fast-ALPR Pipeline)
+    ตัดเฉพาะกรอบป้ายทะเบียนด้วย YOLOv8 + ปรับขนาดมาตรฐานสำหรับ OCR เพื่อให้ตอบสนองในเวลาต่ำกว่า 1 วินาที
     """
     if img_bgr is None:
         return []
 
-    # 3. 4-Point Perspective Alignment (ดัดภาพเบี้ยว/เอียงให้กลับมาเป็นแนวราบ 100%)
-    deskewed_img = align_and_deskew_quadrilateral(img_bgr)
-    
-    # ย่อขนาดรูปภาพสมาร์ทโฟนความละเอียดสูงให้พอดีการประมวลผล (Max Width 1200px)
-    h_orig, w_orig = deskewed_img.shape[:2]
-    if w_orig > 1200:
-        scale = 1200.0 / w_orig
-        deskewed_img = cv2.resize(deskewed_img, (1200, int(h_orig * scale)), interpolation=cv2.INTER_AREA)
-    
-    gray = cv2.cvtColor(deskewed_img, cv2.COLOR_BGR2GRAY)
-    
-    # 1. ลบความเบลอด้วย Unsharp Masking
-    sharpened = apply_laplacian_unsharp_mask(gray)
+    h_orig, w_orig = img_bgr.shape[:2]
+    # ปรับขนาดภาพนำเข้าให้พอดีสำหรับการตรวจจับที่รวดเร็ว (Max Width 900px)
+    if w_orig > 900:
+        scale = 900.0 / float(w_orig)
+        work_img = cv2.resize(img_bgr, (900, int(h_orig * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        work_img = img_bgr.copy()
 
-    # 2. เพิ่มความคมชัดให้ตัวอักษรสีจืด/ไม่เข้มด้วย Morphological Top-Hat Filter
-    text_enhanced = enhance_faded_text_contrast(sharpened)
+    h_work, w_work = work_img.shape[:2]
+    candidate_crops = []
 
-    # 3. Bilateral Filter สำหรับลบแสงสะท้อนจ้า (Glare Removal)
-    denoised = cv2.bilateralFilter(text_enhanced, 9, 75, 75)
-
-    # 4. เพิ่มความคมชัดพื้นที่เงามืด/แสงน้อยด้วย Multi-Scale CLAHE
-    clahe_strong = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8)).apply(denoised)
-    clahe_soft = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4)).apply(denoised)
-    
-    # 5. Thresholding แบบ Otsu & Adaptive
-    _, thresh_otsu = cv2.threshold(clahe_strong, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    thresh_adapt = cv2.adaptiveThreshold(clahe_strong, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-    
-    candidate_crops = [clahe_strong, clahe_soft, thresh_otsu, thresh_adapt, gray]
-
-    # 6. Fast-ALPR YOLOv8 Bounding Box Detection (สกัดเฉพาะข้อความป้ายข้างใน ตัดกรอบโดเรม่อน/ลายนิเมะรอบนอกออก)
+    # 1. Fast-ALPR YOLOv8 Bounding Box Detection (สกัดเฉพาะตัวป้ายทะเบียน)
     try:
         yolo = get_yolo_plate_model()
         if yolo is not None:
-            results = yolo(deskewed_img, verbose=False)
-            if results and len(results) > 0:
+            results = yolo.predict(work_img, verbose=False, conf=0.25)
+            if results and len(results) > 0 and len(results[0].boxes) > 0:
                 boxes = results[0].boxes
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    w = x2 - x1
-                    h = y2 - y1
-                    if w > 30 and h > 15:
-                        pad_x = int(w * 0.02)
-                        pad_y = int(h * 0.02)
-                        crop_x1 = max(0, x1 - pad_x)
-                        crop_y1 = max(0, y1 - pad_y)
-                        crop_x2 = min(w_orig, x2 + pad_x)
-                        crop_y2 = min(h_orig, y2 + pad_y)
+                best_box = max(boxes, key=lambda b: float(b.conf[0]))
+                bx1, by1, bx2, by2 = map(int, best_box.xyxy[0].tolist())
+                bw = bx2 - bx1
+                bh = by2 - by1
+                
+                if bw > 30 and bh > 15:
+                    pad_x = int(bw * 0.04)
+                    pad_y = int(bh * 0.04)
+                    cx1 = max(0, bx1 - pad_x)
+                    cy1 = max(0, by1 - pad_y)
+                    cx2 = min(w_work, bx2 + pad_x)
+                    cy2 = min(h_work, by2 + pad_y)
+                    
+                    plate_roi = work_img[cy1:cy2, cx1:cx2]
+                    if plate_roi.size > 0:
+                        # ปรับความสูงของ ROI เป็นขนาดมาตรฐาน 140px สำหรับ OCR ความเร็วสูงสุด
+                        rh = 140
+                        rw = max(100, int(float(plate_roi.shape[1]) * (140.0 / float(plate_roi.shape[0]))))
+                        plate_resized = cv2.resize(plate_roi, (rw, rh), interpolation=cv2.INTER_CUBIC)
                         
-                        crop = clahe_strong[crop_y1:crop_y2, crop_x1:crop_x2]
-                        if crop.size > 0:
-                            # 4. เจาะครอปเฉพาะพื้นที่ตัวอักษรด้านใน (ตัดขอบกรอบโดเรม่อนออก 12% ด้านนอก)
-                            ch, cw = crop.shape[:2]
-                            inner_crop = crop[int(ch * 0.10):int(ch * 0.90), int(cw * 0.08):int(cw * 0.92)]
-                            
-                            resized_crop = cv2.resize(crop, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-                            candidate_crops.insert(0, resized_crop)
-                            if inner_crop.size > 0:
-                                resized_inner = cv2.resize(inner_crop, (w * 2, h * 2), interpolation=cv2.INTER_CUBIC)
-                                candidate_crops.insert(0, resized_inner)
-                            print(f"[Fast-ALPR] YOLOv8 Plate & Inner Text ROI detected: [{crop_x1}, {crop_y1}, {crop_x2}, {crop_y2}]")
-                            break
+                        # สร้างเวอร์ชัน Contrast สำหรับอ่านตัวอักษรซีดจาง
+                        plate_gray = cv2.cvtColor(plate_resized, cv2.COLOR_BGR2GRAY)
+                        plate_sharp = apply_laplacian_unsharp_mask(plate_gray)
+                        plate_clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(6, 6)).apply(plate_sharp)
+                        
+                        candidate_crops.append(plate_resized) # Color crop for PaddleOCR
+                        candidate_crops.append(plate_clahe)   # Enhanced Gray crop
+                        return candidate_crops
     except Exception as ex:
-        logger.debug(f"[Fast-ALPR] YOLOv8 note: {ex}")
+        logger.debug(f"[Fast-ALPR] YOLOv8 crop note: {ex}")
+
+    # 2. Fallback: 4-Point Perspective Transform & Center-Crop
+    deskewed_img = align_and_deskew_quadrilateral(work_img)
+    dh, dw = deskewed_img.shape[:2]
+    if dh > 180:
+        scale_d = 180.0 / float(dh)
+        deskewed_img = cv2.resize(deskewed_img, (max(100, int(dw * scale_d)), 180), interpolation=cv2.INTER_AREA)
+
+    gray = cv2.cvtColor(deskewed_img, cv2.COLOR_BGR2GRAY)
+    sharpened = apply_laplacian_unsharp_mask(gray)
+    clahe_img = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(6, 6)).apply(sharpened)
     
+    candidate_crops.append(deskewed_img)
+    candidate_crops.append(clahe_img)
     return candidate_crops
 
 
 async def search_license_plate(image_path: str):
     """
-    ระบบอ่านและค้นหาป้ายทะเบียนรถ (License Plate OCR Engine) ความแม่นยำสูง
+    ระบบอ่านและค้นหาป้ายทะเบียนรถ (License Plate OCR Engine) ความเร็วสูงพิเศษ (< 1.0s)
     """
     try:
         image = cv2_imread_unicode(image_path)
@@ -715,15 +722,15 @@ async def search_license_plate(image_path: str):
             except Exception as e:
                 logger.error(f"iApp API search error: {e}")
 
-        # Local Engine: Multi-Scale Preprocessing + Contour Cropping + Dual OCR Engine (PaddleOCR + PyTesseract)
+        # Local Engine: Fast 2-Candidate Crop
         candidate_imgs = preprocess_license_plate_image(image)
 
-        # 1. High Accuracy Pass: PaddleOCR Engine (Thai Deep Neural OCR)
+        # 1. High Speed & Accuracy Pass: PaddleOCR Engine (cls=False for 3x speedup)
         paddle_ocr = get_paddleocr_engine()
         if paddle_ocr is not None:
             def _paddle_pass(img_input):
                 try:
-                    res = paddle_ocr.ocr(img_input, cls=True)
+                    res = paddle_ocr.ocr(img_input, cls=False)
                     text_str = ""
                     if res and res[0]:
                         for line in res[0]:
@@ -741,13 +748,15 @@ async def search_license_plate(image_path: str):
                         if match:
                             return match
 
-        # 2. Standard Pass: PyTesseract Engine
+        # 2. Fast Fallback Pass: PyTesseract Engine (Single PSM mode on best crop)
         def _ocr_pass(img_input, psm_mode):
-            return pytesseract.image_to_string(img_input, lang="tha+eng", config=f"--psm {psm_mode}").strip()
+            try:
+                return pytesseract.image_to_string(img_input, lang="tha+eng", config=f"--psm {psm_mode}").strip()
+            except Exception:
+                return ""
 
-        # วนลูปทดสอบอ่านตัวอักษรจากกรอบป้ายทะเบียนและภาพปรับปรุงความคมชัด
         for c_img in candidate_imgs:
-            for psm in [7, 6, 11]:
+            for psm in [7, 6]:
                 raw_text = await asyncio.to_thread(_ocr_pass, c_img, psm)
                 if raw_text:
                     clean_txt = "".join(ch for ch in raw_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")

@@ -310,7 +310,15 @@ async def handle_telegram_update(update: dict):
     image_bytes = await download_file(file_path)
 
     detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    result_data = await process_media(request_id, image_bytes, mode="auto")
+    try:
+        result_data = await process_media(request_id, image_bytes, mode="auto")
+    except Exception as ex:
+        logger.error(f"Error in process_media: {ex}")
+        result_data = {
+            "found": False,
+            "detected_type_label": "🔍 ภาพที่ส่งเข้ามา",
+            "message": f"เกิดข้อผิดพลาดในการประมวลผลรูปภาพ: {ex}"
+        }
 
     # อัปเดต status
     async with await get_connection() as conn:

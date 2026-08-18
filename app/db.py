@@ -14,6 +14,8 @@ pool = None
 
 async def init_db():
     global pool
+    if pool is not None:
+        return pool
     pool = await aiomysql.create_pool(
         host=MYSQL_HOST,
         port=MYSQL_PORT,
@@ -21,9 +23,11 @@ async def init_db():
         password=MYSQL_PASSWORD,
         db=MYSQL_DB,
         autocommit=True,
-        minsize=1,
-        maxsize=5,
+        minsize=2,
+        maxsize=20,
+        connect_timeout=10,
     )
+    return pool
 
 async def get_connection():
     if pool is None:

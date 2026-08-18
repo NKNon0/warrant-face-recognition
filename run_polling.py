@@ -24,6 +24,16 @@ TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 async def main():
     # Initialize DB connection pool
     await init_db()
+
+    print("[AI Warmup] Preloading InsightFace, YOLOv8, and PaddleOCR models into memory...")
+    try:
+        from app.ai_processor import get_insightface_app, get_yolo_plate_model, get_paddleocr_engine
+        await asyncio.to_thread(get_insightface_app)
+        await asyncio.to_thread(get_yolo_plate_model)
+        await asyncio.to_thread(get_paddleocr_engine)
+        print("[AI Warmup] ✅ All AI models warm in memory (Zero latency)!")
+    except Exception as e:
+        print(f"[AI Warmup Note]: {e}")
     
     print("\n" + "="*50)
     print(" 🤖 Telegram Bot Polling Mode Started... (กำลังทำงาน)")

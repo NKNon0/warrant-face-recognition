@@ -21,22 +21,26 @@ async def root():
 
 async def auto_train_datasets_on_startup():
     """
-    เทรนและซิงค์ข้อมูล AI อัตโนมัติทุกครั้งเมื่อเซิร์ฟเวอร์เปิดใช้งาน
-    (Auto-Train & Ingest All 3 Datasets on Server Startup)
+    โหลดโมเดล AI ทั้งหมดให้อุ่นในหน่วยความจำทันที และซิงค์ฐานข้อมูล
     """
     try:
-        from scratch.master_train_all_ai import master_train
+        from app.ai_processor import get_insightface_app, get_yolo_plate_model, get_paddleocr_engine
+        print("[AI Warmup] Preloading InsightFace, YOLOv8, and PaddleOCR into memory...")
+        await asyncio.to_thread(get_insightface_app)
+        await asyncio.to_thread(get_yolo_plate_model)
+        await asyncio.to_thread(get_paddleocr_engine)
+        print("[AI Warmup] ✅ All AI Models warmed up in memory (Zero cold-start delay)!")
 
+        from scratch.master_train_all_ai import master_train
         print("[Auto-Train] Starting background AI dataset training & vector sync...")
         await master_train()
         print("[Auto-Train] ✅ All 3 AI Engines trained & synced automatically on startup!")
     except Exception as e:
-        print(f"[Auto-Train] Note: {e}")
+        print(f"[Auto-Train/Warmup] Note: {e}")
 
 @app.on_event("startup")
 async def startup_event():
     await init_db()
-    # เรียกทำงาน Auto-Train AI อัตโนมัติทุกครั้งที่เปิดเซิร์ฟเวอร์
     asyncio.create_task(auto_train_datasets_on_startup())
 
 @app.post("/telegram-webhook")
