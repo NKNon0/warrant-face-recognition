@@ -118,83 +118,19 @@ def get_base_url() -> str:
     return url
 
 
-def get_miniapp_url() -> str:
-    base = get_base_url()
-    return f"{base}/static/index.html"
-
-
-async def set_telegram_webhook():
-    """ลงทะเบียน Webhook URL กับ Telegram API เพื่อรับข้อความและคำสั่ง /start"""
-    base = get_base_url()
-    if base.startswith("https://"):
-        webhook_url = f"{base}/telegram-webhook"
-        url = f"{TELEGRAM_API}/setWebhook"
-        payload = {"url": webhook_url}
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as resp:
-                    res = await resp.json()
-                    logger.info(f"setWebhook ({webhook_url}): {res}")
-                    print(f"[Telegram Bot] Webhook Registered: {webhook_url} -> {res}")
-        except Exception as e:
-            logger.error(f"setWebhook error: {e}")
-
-
-async def set_telegram_menu_button(chat_id: int | None = None):
-    """ตั้งค่าปุ่ม Mini App ตรงเมนูล่างซ้ายของ Telegram เป็นปุ่มหลักเพียงอันเดียว"""
-    base = get_base_url()
-    if base.startswith("https://"):
-        target_url = get_miniapp_url()
-        url = f"{TELEGRAM_API}/setChatMenuButton"
-        payload = {
-            "menu_button": {
-                "type": "web_app",
-                "text": "MiniApp",
-                "web_app": {"url": target_url}
-            }
-        }
-        if chat_id:
-            payload["chat_id"] = chat_id
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as resp:
-                    res = await resp.json()
-                    logger.info(f"setChatMenuButton: {res}")
-                    print(f"[Telegram Bot] Menu Button Set ({target_url}): {res}")
-        except Exception as e:
-            logger.error(f"setChatMenuButton error: {e}")
-
-
-def build_authorized_keyboard() -> dict | None:
-    """สร้าง Inline Keyboard ปุ่ม Mini App ปุ่มใหญ่ส่งไปในแชททันที"""
-    base = get_base_url()
-    if base.startswith("https://"):
-        target_url = get_miniapp_url()
-        return {
-            "inline_keyboard": [
-                [
-                    {
-                        "text": "🚀 เปิดระบบสแกน MiniApp (คลิกที่นี่)",
-                        "web_app": {"url": target_url}
-                    }
-                ]
-            ]
-        }
-    return None
-
-
 def format_face_result(result: dict, detected_at: str) -> str:
-    """สร้างข้อความผลลัพธ์แบบมีโครงสร้างเหมือนในภาพ"""
-    score = result.get("score", 0)
+    """สร้างข้อความผลลัพธ์การตรวจพบใบหน้า"""
+    score = result.get("score", 0.0)
     text = (
-        f"📅 <b>วันที่:</b> {detected_at}\n"
-        f"🪪 <b>เลขบัตร:</b> {result.get('id_number', '-')}\n"
-        f"👤 <b>ชื่อ:</b> {result.get('person_name', '-')}\n"
-        f"📋 <b>รายละเอียด:</b> {result.get('detail', '-')}\n"
-        f"🏠 <b>โรงพัก:</b> {result.get('station', '-')}\n"
-        f"⚖️ <b>ศาล:</b> {result.get('court', '-')}\n"
-        f"🎯 <b>ความคล้าย:</b> {score:.2f}%\n"
-        f"🕐 <b>เวลาที่พบ:</b> {result.get('found_at', '-')}"
+        f"🚨 <b>ผลการตรวจพบใบหน้าบุคคลเป้าหมาย!</b>\n"
+        f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 👤 ใบหน้าบุคคล\n"
+        f"👤 <b>ชื่อ-สกุล:</b> {result.get('person_name', '-')}\n"
+        f"🪪 <b>เลขบัตรประชาชน:</b> {result.get('id_number', '-')}\n"
+        f"📋 <b>รายละเอียดข้อหา:</b> {result.get('detail', '-')}\n"
+        f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {result.get('station', '-')}\n"
+        f"⚖️ <b>ศาลที่ออกหมายจับ:</b> {result.get('court', '-')}\n"
+        f"🎯 <b>ความคล้ายคลึง:</b> {score:.2f}%\n"
+        f"🕐 <b>เวลาที่ตรวจพบ:</b> {detected_at}"
     )
     return text
 
@@ -202,7 +138,6 @@ def format_face_result(result: dict, detected_at: str) -> str:
 async def handle_callback_query(callback_query: dict):
     cb_id = callback_query["id"]
     data = callback_query.get("data", "")
-    from_user = callback_query.get("from", {})
     msg = callback_query.get("message", {})
     chat_id = msg.get("chat", {}).get("id")
     message_id = msg.get("message_id")
@@ -217,13 +152,11 @@ async def handle_callback_query(callback_query: dict):
             f"{msg.get('text', '')}\n\n✅ <b>สถานะ: อนุมัติสิทธิ์เรียบร้อยแล้ว</b>",
             reply_markup={"inline_keyboard": []},
         )
-        # ส่งข้อความแจ้งผู้ใช้ที่ได้รับการอนุมัติ
-        markup = build_authorized_keyboard()
         await send_message(
             target_id,
             "🎉 <b>ยินดีด้วย! บัญชีของคุณได้รับการอนุมัติให้ใช้งานระบบเรียบร้อยแล้ว</b>\n\n"
-            "📸 คุณสามารถส่งรูปภาพ (ใบหน้า / บัตรประชาชน / ป้ายทะเบียน) เข้ามาในแชทนี้เพื่อทำการตรวจสอบประวัติอาชญากรรมได้ทันทีครับ!",
-            reply_markup=markup,
+            "📸 <b>วิธีใช้งาน:</b>\n"
+            "ท่านสามารถส่งรูปภาพ (ใบหน้า / ป้ายทะเบียนรถ / บัตรประชาชน) เข้ามาในแชทนี้ได้โดยตรง ระบบ AI จะวิเคราะห์และตรวจสอบให้ทันทีครับ!",
         )
 
     elif data.startswith("reject_"):
@@ -270,18 +203,20 @@ async def handle_telegram_update(update: dict):
     is_authorized = bool(user_record and (user_record.get("is_authorized") == 1 or user_record.get("role") == 'admin'))
     user_db_id = user_record["id"] if user_record else None
 
-    # กรณีส่งคำสั่ง /start
-    if text == "/start":
-        await set_telegram_menu_button(chat_id)
+    # กรณีส่งคำสั่ง /start หรือ /help
+    if text in ["/start", "/help"]:
         if is_authorized:
-            markup = build_authorized_keyboard()
-            await send_message(
-                chat_id,
+            welcome_msg = (
                 f"👮‍♂️ สวัสดีครับ <b>{first_name}</b>!\n"
-                f"ยินดีต้อนรับสู่ระบบ AI ตรวจสอบประวัติอาชญากรรมสำหรับเจ้าหน้าที่ตำรวจ\n\n"
-                f"📸 ท่านสามารถส่งรูปภาพ (ใบหน้า/บัตรประชาชน/ป้ายทะเบียน) เข้ามาในแชทนี้ได้ทันทีครับ",
-                reply_markup=markup,
+                f"ยินดีต้อนรับสู่ระบบ <b>AI ตรวจสอบประวัติอาชญากรรมและหมายจับอัตโนมัติ</b>\n\n"
+                f"📸 <b>วิธีใช้งาน:</b>\n"
+                f"ส่งรูปภาพเข้ามาในแชทนี้ได้ทันทีครับ โดย AI จะทำการแยกประเภทอัตโนมัติ:\n"
+                f" • 👤 <b>ใบหน้าบุคคล</b> ➔ ค้นหาเปรียบเทียบใบหน้าผู้ต้องหาตามหมายจับ\n"
+                f" • 🚗 <b>ป้ายทะเบียนรถ</b> ➔ ตรวจสอบรถชนแล้วหนี / รถผิดกฎหมาย / รถ พ.ร.บ ขาด\n"
+                f" • 🪪 <b>บัตรประชาชน</b> ➔ ตรวจสอบเลขประจำตัว 13 หลักและชื่อผู้ต้องหา\n\n"
+                f"<i>ท่านสามารถถ่ายภาพหรือแนบรูปภาพส่งเข้ามาได้ตลอดเวลาครับ 🚀</i>"
             )
+            await send_message(chat_id, welcome_msg)
         else:
             await send_message(
                 chat_id,
@@ -323,7 +258,10 @@ async def handle_telegram_update(update: dict):
         return
 
     if "photo" not in message:
-        await send_message(chat_id, "📸 กรุณาส่งรูปภาพเพื่อทำการตรวจสอบประวัติ")
+        await send_message(
+            chat_id,
+            "📸 กรุณาส่งรูปภาพ (ใบหน้าบุคคล / ป้ายทะเบียนรถ / บัตรประชาชน) เข้ามาในแชทเพื่อเริ่มการตรวจสอบครับ"
+        )
         return
 
     photo_sizes = message["photo"]
@@ -340,7 +278,7 @@ async def handle_telegram_update(update: dict):
             )
             existing = await cur.fetchone()
             if existing:
-                return  # ข้ามการประมวลผลถ้าเคยทำไปแล้ว
+                return
 
     # บันทึก media_request
     request_id = None
@@ -352,13 +290,13 @@ async def handle_telegram_update(update: dict):
             )
             request_id = cur.lastrowid
 
-    await send_message(chat_id, "⏳ ได้รับรูปภาพแล้ว กำลังตรวจสอบ กรุณารอสักครู่...")
+    await send_message(chat_id, "⏳ <b>ได้รับรูปภาพแล้ว</b> AI กำลังจำแนกประเภทและตรวจสอบกับฐานข้อมูลหมายจับ...")
 
     file_path = await fetch_file_path(file_id)
     image_bytes = await download_file(file_path)
 
     detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    result_data = await process_media(request_id, image_bytes)
+    result_data = await process_media(request_id, image_bytes, mode="auto")
 
     # อัปเดต status
     async with await get_connection() as conn:
@@ -368,12 +306,21 @@ async def handle_telegram_update(update: dict):
                 ("processed", request_id),
             )
 
+    detected_type_label = result_data.get("detected_type_label", "🔍 ภาพที่ส่งเข้ามา")
+
     if not result_data.get("found"):
-        await send_message(chat_id, "❌ ไม่พบข้อมูลที่ตรงกับฐานข้อมูล")
+        not_found_msg = (
+            f"❌ <b>ไม่พบข้อมูลในฐานข้อมูลหมายจับ</b>\n"
+            f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> {detected_type_label}\n\n"
+            f"ℹ️ ตรวจสอบแล้วไม่พบข้อมูลประวัติหมายจับ ยานพาหนะเฝ้าระวัง หรือข้อมูลผู้ต้องสงสัยในระบบ"
+        )
+        await send_message(chat_id, not_found_msg)
         return
 
     for item in result_data.get("results", []):
-        if item.get("type") == "face":
+        item_type = item.get("type")
+
+        if item_type == "face":
             caption = format_face_result(item, detected_at)
             photo_file = item.get("photo_url")
             if photo_file and os.path.exists(photo_file):
@@ -381,26 +328,32 @@ async def handle_telegram_update(update: dict):
             else:
                 await send_message(chat_id, caption)
 
-        elif item.get("type") == "plate":
+        elif item_type == "plate":
+            score = item.get("score", 95.0)
             plate_msg = (
-                f"🚨 <b>ผลการตรวจพบป้ายทะเบียนเฝ้าระวัง!</b>\n"
+                f"🚨 <b>ผลการตรวจพบป้ายทะเบียนรถเฝ้าระวัง!</b>\n"
+                f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 🚗 ป้ายทะเบียนรถ\n"
                 f"🚗 <b>ป้ายทะเบียน:</b> {item.get('plate_text', '-')}\n"
                 f"📍 <b>จังหวัด:</b> {item.get('province', '-')}\n"
                 f"🚨 <b>หมวดหมู่:</b> {item.get('category', '-')}\n"
                 f"📋 <b>สาเหตุ/รายละเอียดข้อหา:</b> {item.get('detail', '-')}\n"
                 f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {item.get('station', '-')}\n"
-                f"🎯 <b>ความถูกต้อง:</b> {item.get('score', 95):.2f}%"
+                f"🎯 <b>ความถูกต้อง:</b> {score:.2f}%\n"
+                f"🕐 <b>เวลาที่ตรวจพบ:</b> {detected_at}"
             )
             await send_message(chat_id, plate_msg)
 
-        elif item.get("type") == "id_card":
+        elif item_type == "id_card":
+            score = item.get("score", 99.85)
             id_msg = (
-                f"🚨 <b>ผลการตรวจพบบัตรประชาชนเป้าหมาย!</b>\n"
+                f"🚨 <b>ผลการตรวจพบบัตรประชาชนหมายจับ!</b>\n"
+                f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 🪪 บัตรประจำตัวประชาชน\n"
                 f"👤 <b>ชื่อ-สกุล:</b> {item.get('person_name') or item.get('name') or '-'}\n"
                 f"🪪 <b>เลขบัตรประชาชน:</b> {item.get('id_number', '-')}\n"
                 f"📋 <b>รายละเอียดข้อหา:</b> {item.get('detail', '-')}\n"
                 f"🏠 <b>สถานีตำรวจรับแจ้ง:</b> {item.get('station', '-')}\n"
                 f"⚖️ <b>ศาลที่ออกหมายจับ:</b> {item.get('court', '-')}\n"
-                f"🎯 <b>ความคล้าย:</b> {item.get('score', 99):.2f}%"
+                f"🎯 <b>ความคล้ายคลึง:</b> {score:.2f}%\n"
+                f"🕐 <b>เวลาที่ตรวจพบ:</b> {detected_at}"
             )
             await send_message(chat_id, id_msg)

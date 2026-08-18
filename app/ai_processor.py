@@ -104,10 +104,88 @@ def is_valid_image(image_path: str) -> tuple[bool, str]:
         return False, f"เกิดข้อผิดพลาดในการตรวจสอบรูปภาพ: {e}"
 
 
-async def process_media(request_id: int, image_bytes: bytes, mode: str = "all") -> dict:
+def classify_image_type(image_path: str) -> tuple[str, float]:
     """
-    ประมวลผลรูปภาพและค้นหาข้อมูลจากฐานข้อมูลตามโหมดที่ระบุ
-    mode: 'face', 'idcard', 'plate', 'all'
+    AI Multi-Modal Image Classifier:
+    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ:
+    1. 'plate'  -> 🚗 ป้ายทะเบียนรถยนต์/รถจักรยานยนต์
+    2. 'idcard' -> 🪪 บัตรประจำตัวประชาชน
+    3. 'face'   -> 👤 ใบหน้าบุคคลต้องสงสัย
+    คืนค่าเป็น (predicted_type, confidence_score)
+    """
+    try:
+        img = cv2_imread_unicode(image_path)
+        if img is None:
+            return "face", 0.50
+
+        h, w = img.shape[:2]
+        aspect_ratio = float(w) / float(h) if h > 0 else 1.0
+
+        # --- 1. ตรวจสอบ ป้ายทะเบียนรถ (License Plate Detection) ---
+        yolo = get_yolo_plate_model()
+        if yolo is not None:
+            try:
+                y_res = yolo.predict(img, verbose=False, conf=0.35)
+                if y_res and len(y_res) > 0 and len(y_res[0].boxes) > 0:
+                    box = y_res[0].boxes[0]
+                    conf = float(box.conf[0])
+                    bx1, by1, bx2, by2 = map(int, box.xyxy[0])
+                    bw = max(1, bx2 - bx1)
+                    bh = max(1, by2 - by1)
+                    box_ratio = float(bw) / float(bh)
+                    if box_ratio >= 1.3:
+                        return "plate", round(max(0.85, conf), 2)
+            except Exception:
+                pass
+
+        # --- 2. ตรวจสอบ บัตรประชาชน (Thai ID Card Detection) ---
+        full_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        try:
+            quick_text = pytesseract.image_to_string(full_gray, lang="tha+eng", config="--psm 6 --dpi 150").strip()
+            id_keywords = ["บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่", "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ"]
+            keyword_matches = sum(1 for kw in id_keywords if kw in quick_text)
+            
+            id_num_match = extract_id_number(quick_text)
+            if id_num_match or keyword_matches >= 2:
+                return "idcard", 0.95
+            elif keyword_matches == 1 and (1.2 <= aspect_ratio <= 2.0):
+                return "idcard", 0.85
+        except Exception:
+            pass
+
+        # --- 3. ตรวจสอบ ใบหน้าบุคคล (Face Detection) ---
+        iface_app = get_insightface_app()
+        if iface_app is not None:
+            try:
+                faces = iface_app.get(img)
+                if faces and len(faces) > 0:
+                    best_face = max(faces, key=lambda f: float(f.det_score))
+                    det_score = float(best_face.det_score)
+                    if det_score >= 0.55:
+                        return "face", round(det_score, 2)
+            except Exception:
+                pass
+
+        if detect_and_crop_face(image_path) is not None:
+            return "face", 0.80
+
+        # --- 4. กฎสัดส่วนภาพและลักษณะภาพ (Fallback Heuristics) ---
+        if aspect_ratio >= 2.2:
+            return "plate", 0.70
+        elif 1.35 <= aspect_ratio <= 1.85:
+            return "idcard", 0.65
+
+        return "face", 0.60
+    except Exception as e:
+        logger.error(f"classify_image_type error: {e}")
+        return "face", 0.50
+
+
+async def process_media(request_id: int, image_bytes: bytes, mode: str = "auto") -> dict:
+    """
+    ประมวลผลรูปภาพและค้นหาข้อมูลจากฐานข้อมูล
+    หาก mode = 'auto' ระบบ AI จะจำแนกประเภท (ใบหน้า, ป้ายทะเบียน, บัตรประชาชน) อัตโนมัติ!
+    mode: 'auto', 'face', 'idcard', 'plate', 'all'
     """
     image_path = save_temp_image(image_bytes)
     try:
@@ -116,63 +194,111 @@ async def process_media(request_id: int, image_bytes: bytes, mode: str = "all") 
         if not is_valid:
             return {"found": False, "message": err_msg}
 
+        # 1. AI จำแนกประเภทของรูปภาพอัตโนมัติ (Multi-Modal Auto Classification)
+        predicted_type, type_conf = classify_image_type(image_path)
+        type_labels = {
+            "face": "👤 ใบหน้าบุคคล",
+            "plate": "🚗 ป้ายทะเบียนรถ",
+            "idcard": "🪪 บัตรประจำตัวประชาชน"
+        }
+        detected_label = type_labels.get(predicted_type, "🔍 ภาพตรวจพิสูจน์")
+
         results = []
 
-        if mode == "face":
+        if mode == "auto" or mode == "all":
+            # ลำดับการตรวจสอบตามผลการจำแนกประเภท (Smart Ordered Pipeline)
+            pipeline_order = [predicted_type]
+            for t in ["face", "plate", "idcard"]:
+                if t not in pipeline_order:
+                    pipeline_order.append(t)
+
+            for target_type in pipeline_order:
+                if target_type == "face":
+                    face_result = await search_face(image_path)
+                    if face_result and face_result.get("type") != "no_face":
+                        face_result["detected_type"] = "face"
+                        face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
+                        results.append(face_result)
+                        await save_search_result(
+                            request_id=request_id,
+                            result_type="face",
+                            match_score=face_result.get("score", 0.0),
+                            matched_record_id=face_result.get("id"),
+                            details=face_result,
+                        )
+                        break
+
+                elif target_type == "plate":
+                    plate_result = await search_license_plate(image_path)
+                    if plate_result:
+                        p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
+                        p_dict["detected_type"] = "plate"
+                        p_dict["detected_type_label"] = "🚗 ป้ายทะเบียนรถ"
+                        results.append(p_dict)
+                        await save_search_result(
+                            request_id=request_id,
+                            result_type="license_plate",
+                            match_score=p_dict.get("score", 100.0),
+                            matched_record_id=p_dict.get("id"),
+                            details=p_dict,
+                        )
+                        break
+
+                elif target_type == "idcard":
+                    id_card_result = await search_id_card(image_path)
+                    if id_card_result:
+                        id_dict = {"type": "id_card", **id_card_result}
+                        id_dict["detected_type"] = "id_card"
+                        id_dict["detected_type_label"] = "🪪 บัตรประจำตัวประชาชน"
+                        results.append(id_dict)
+                        await save_search_result(
+                            request_id=request_id,
+                            result_type="id_card",
+                            match_score=id_dict.get("score", 99.0),
+                            matched_record_id=id_card_result.get("id"),
+                            details=id_card_result,
+                        )
+                        break
+
+        elif mode == "face":
             face_result = await search_face(image_path)
             if face_result and face_result.get("type") != "no_face":
+                face_result["detected_type"] = "face"
+                face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
                 results.append(face_result)
-                await save_search_result(
-                    request_id=request_id,
-                    result_type="face",
-                    match_score=face_result.get("score", 0.0),
-                    matched_record_id=face_result.get("id"),
-                    details=face_result,
-                )
             elif face_result and face_result.get("type") == "no_face":
-                return {"found": False, "message": face_result.get("message", "ไม่พบใบหน้าบุคคลในภาพถ่าย")}
+                return {"found": False, "predicted_type": "face", "detected_type_label": "👤 ใบหน้าบุคคล", "message": "ไม่พบใบหน้าบุคคลในภาพถ่าย"}
 
         elif mode == "plate":
             plate_result = await search_license_plate(image_path)
             if plate_result:
-                results.append(plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result})
-                await save_search_result(
-                    request_id=request_id,
-                    result_type="license_plate",
-                    match_score=plate_result.get("score", 100.0) if isinstance(plate_result, dict) else 1.0,
-                    matched_record_id=plate_result.get("id") if isinstance(plate_result, dict) else None,
-                    details=plate_result if isinstance(plate_result, dict) else {"plate_text": plate_result},
-                )
+                p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
+                p_dict["detected_type"] = "plate"
+                p_dict["detected_type_label"] = "🚗 ป้ายทะเบียนรถ"
+                results.append(p_dict)
 
         elif mode == "idcard":
             id_card_result = await search_id_card(image_path)
             if id_card_result:
-                results.append({"type": "id_card", **id_card_result})
-                await save_search_result(
-                    request_id=request_id,
-                    result_type="id_card",
-                    match_score=1.0,
-                    matched_record_id=id_card_result.get("id"),
-                    details=id_card_result,
-                )
-        else:
-            # Fallback mode=all (สแกนค้นหาทุกฐานข้อมูลแบบแยกส่วน)
-            face_res = await search_face(image_path)
-            if face_res and face_res.get("type") != "no_face":
-                results.append(face_res)
-            plate_res = await search_license_plate(image_path)
-            if plate_res:
-                results.append(plate_res if isinstance(plate_res, dict) else {"type": "plate", "plate_text": plate_res})
-            id_res = await search_id_card(image_path)
-            if id_res:
-                results.append({"type": "id_card", **id_res})
+                id_dict = {"type": "id_card", **id_card_result}
+                id_dict["detected_type"] = "id_card"
+                id_dict["detected_type_label"] = "🪪 บัตรประจำตัวประชาชน"
+                results.append(id_dict)
 
         if not results:
-            mode_names = {"face": "ใบหน้า", "idcard": "บัตรประชาชน", "plate": "ป้ายทะเบียน"}
-            mode_text = mode_names.get(mode, "ข้อมูล")
-            return {"found": False, "message": f"ไม่พบข้อมูล{mode_text}ที่ตรงกับฐานข้อมูลหมายจับ"}
+            return {
+                "found": False,
+                "predicted_type": predicted_type,
+                "detected_type_label": detected_label,
+                "message": f"ตรวจพบประเภท: {detected_label} แต่ไม่พบข้อมูลที่ตรงกับฐานข้อมูลหมายจับ"
+            }
 
-        return {"found": True, "results": results}
+        return {
+            "found": True,
+            "predicted_type": predicted_type,
+            "detected_type_label": detected_label,
+            "results": results
+        }
     finally:
         if os.path.exists(image_path):
             os.remove(image_path)
