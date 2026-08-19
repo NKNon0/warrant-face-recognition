@@ -1,16 +1,16 @@
-# Re-export for backward compatibility
-from app.db.vector_db import (
-    get_qdrant_client,
+from .mysql import init_db, get_connection
+from .vector_db import (
     init_qdrant_collection,
     upsert_face_embedding,
     search_similar_faces,
-    QDRANT_COLLECTION_NAME,
+    get_qdrant_client,
 )
 
 __all__ = [
-    "get_qdrant_client",
+    "init_db",
+    "get_connection",
     "init_qdrant_collection",
     "upsert_face_embedding",
     "search_similar_faces",
-    "QDRANT_COLLECTION_NAME",
+    "get_qdrant_client",
 ]

@@ -1,25 +1,18 @@
-"""
-Telegram Bot Facade
-Re-exports all bot services, formatting, and update handlers for clean backward compatibility.
-"""
-
-from app.config import TELEGRAM_TOKEN, TELEGRAM_API, ADMIN_TELEGRAM_ID
-from app.bot import (
+from .bot_service import (
     handle_telegram_update,
     send_message,
     send_photo,
     remove_telegram_menu_button,
     upsert_user,
     set_user_authorization,
+)
+from .formatter import (
     format_face_result,
     format_plate_result,
     format_id_card_result,
 )
 
 __all__ = [
-    "TELEGRAM_TOKEN",
-    "TELEGRAM_API",
-    "ADMIN_TELEGRAM_ID",
     "handle_telegram_update",
     "send_message",
     "send_photo",
