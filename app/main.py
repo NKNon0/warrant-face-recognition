@@ -2,17 +2,11 @@ import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from app.telegram_bot import handle_telegram_update
 from app.db import init_db
 from app.api import router as api_router
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-
-app = FastAPI(title="Telegram AI Search Service")
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app = FastAPI(title="Warrant AI Recognition Direct Bot Service")
 app.include_router(api_router)
 
 @app.get("/", include_in_schema=False)

@@ -14,7 +14,6 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 ADMIN_TELEGRAM_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
-WEBAPP_URL = os.getenv("WEBAPP_URL", "http://127.0.0.1:8000")
 
 
 async def fetch_file_path(file_id: str) -> str:
@@ -109,24 +108,20 @@ async def set_user_authorization(telegram_id: int, is_authorized: bool):
             )
 
 
-def get_base_url() -> str:
-    url = (os.getenv("WEBAPP_URL") or "http://127.0.0.1:8000").strip().rstrip("/")
-    if url.endswith("/static/index.html"):
-        url = url[:-len("/static/index.html")]
-    elif url.endswith("/static"):
-        url = url[:-len("/static")]
-    return url
-
-
 async def remove_telegram_menu_button(chat_id: int | None = None):
-    """ลบปุ่ม Mini App และคืนค่า Menu Button เป็น default"""
-    url = f"{TELEGRAM_API}/setChatMenuButton"
-    payload = {"menu_button": {"type": "default"}}
-    if chat_id:
-        payload["chat_id"] = chat_id
+    """ลบปุ่ม Mini App, Menu Button และ Command List ออกจาก Telegram ทั้งหมดอย่างถาวร"""
     try:
         async with aiohttp.ClientSession() as session:
-            await session.post(url, json=payload)
+            # 1. รีเซ็ต Menu Button ให้เป็น Default (ไม่มีปุ่มเปิดเว็บ/แอป)
+            menu_url = f"{TELEGRAM_API}/setChatMenuButton"
+            payload = {"menu_button": {"type": "default"}}
+            if chat_id:
+                payload["chat_id"] = chat_id
+            await session.post(menu_url, json=payload)
+
+            # 2. ล้างคำสั่งเมนูบอท (deleteMyCommands)
+            del_cmd_url = f"{TELEGRAM_API}/deleteMyCommands"
+            await session.post(del_cmd_url, json={})
     except Exception as e:
         logger.error(f"remove_telegram_menu_button error: {e}")
 
