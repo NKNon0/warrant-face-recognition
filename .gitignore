@@ -13,14 +13,18 @@ dist/
 build/
 *.sqlite3
 
-# Binaries & Scratch
+# Binaries & Executables
+*.exe
 cloudflared.exe
 scratch/
 *.log
 
-# PDPA Sensitive Data Protection (DO NOT PUSH TO GITHUB)
+# Temporary & Upload Dirs
+temp/
+uploads/
+
+# PDPA Sensitive Data Protection (DO NOT PUSH SENSITIVE DATA TO GITHUB)
 datatest/
 *.jpg
 *.jpeg
 *.png
-!app/static/*
