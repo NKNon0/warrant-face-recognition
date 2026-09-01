@@ -2,9 +2,9 @@ import os
 import logging
 import asyncio
 import pytesseract
-from app.modules.face.detector import cv2_imread_unicode
 from app.config import IAPP_API_KEY
-from .detector import preprocess_license_plate_image
+from app.modules.face.detector import cv2_imread_unicode
+from .detector import preprocess_license_plate_image, classify_license_plate_type
 from .matcher import find_license_plate
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,10 @@ def get_paddleocr_engine():
     if not PADDLE_OCR_AVAILABLE or PaddleOCR is None:
         return None
     try:
-        PADDLE_OCR_ENGINE = PaddleOCR(use_angle_cls=False, lang='th', show_log=False)
+        try:
+            PADDLE_OCR_ENGINE = PaddleOCR(use_angle_cls=False, lang='th')
+        except TypeError:
+            PADDLE_OCR_ENGINE = PaddleOCR(lang='th')
         print("[ALPR OCR] ✅ PaddleOCR Thai Engine loaded successfully!")
     except Exception as ex:
         print(f"[ALPR OCR] PaddleOCR init error: {ex}")
@@ -78,6 +81,10 @@ async def search_license_plate(image_path: str) -> dict | None:
         # ----------------------------------------------------
         candidate_imgs = preprocess_license_plate_image(image)
 
+        plate_type_code, plate_type_label = "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
+        if candidate_imgs and len(candidate_imgs) > 0:
+            plate_type_code, plate_type_label = classify_license_plate_type(candidate_imgs[0])
+
         # 1. High Speed Pass: PaddleOCR Engine (cls=False)
         paddle_ocr = get_paddleocr_engine()
         if paddle_ocr is not None:
@@ -99,6 +106,8 @@ async def search_license_plate(image_path: str) -> dict | None:
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:
+                            match["plate_type_code"] = plate_type_code
+                            match["plate_type_label"] = plate_type_label
                             return match
 
         # 2. Fast Fallback Pass: PyTesseract Engine
@@ -116,6 +125,8 @@ async def search_license_plate(image_path: str) -> dict | None:
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:
+                            match["plate_type_code"] = plate_type_code
+                            match["plate_type_label"] = plate_type_label
                             return match
 
         return None

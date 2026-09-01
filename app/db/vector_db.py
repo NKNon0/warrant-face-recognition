@@ -16,20 +16,31 @@ except ImportError:
     logger.warning("[Qdrant] qdrant-client library not installed, using MySQL fallback.")
 
 qdrant_client_instance = None
+_qdrant_checked = False
+_qdrant_available_status = False
 
 
 def get_qdrant_client():
     """เชื่อมต่อกับ Qdrant Vector Database"""
-    global qdrant_client_instance
+    global qdrant_client_instance, _qdrant_checked, _qdrant_available_status
     if not QDRANT_AVAILABLE or QdrantClient is None:
+        return None
+    if _qdrant_checked and not _qdrant_available_status:
         return None
     if qdrant_client_instance is not None:
         return qdrant_client_instance
     try:
-        qdrant_client_instance = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=5.0)
+        qdrant_client_instance = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, timeout=2.0, check_compatibility=False)
+        # Test connection
+        _ = qdrant_client_instance.get_collections()
+        _qdrant_checked = True
+        _qdrant_available_status = True
         return qdrant_client_instance
     except Exception as e:
-        logger.warning(f"[Qdrant] Could not connect to Qdrant at {QDRANT_HOST}:{QDRANT_PORT}: {e}")
+        logger.debug(f"[Qdrant] Note: {e}")
+        _qdrant_checked = True
+        _qdrant_available_status = False
+        qdrant_client_instance = None
         return None
 
 
@@ -88,13 +99,26 @@ def search_similar_faces(query_embedding: List[float], limit: int = 5, score_thr
         return []
     try:
         init_qdrant_collection()
-        search_results = client.search(
-            collection_name=QDRANT_COLLECTION_NAME,
-            query_vector=query_embedding,
-            limit=limit,
-            score_threshold=score_threshold,
-            with_payload=True,
-        )
+        if hasattr(client, "search"):
+            search_results = client.search(
+                collection_name=QDRANT_COLLECTION_NAME,
+                query_vector=query_embedding,
+                limit=limit,
+                score_threshold=score_threshold,
+                with_payload=True,
+            )
+        elif hasattr(client, "query_points"):
+            response = client.query_points(
+                collection_name=QDRANT_COLLECTION_NAME,
+                query=query_embedding,
+                limit=limit,
+                score_threshold=score_threshold,
+                with_payload=True,
+            )
+            search_results = response.points
+        else:
+            search_results = []
+
         results = []
         for hit in search_results:
             results.append({
@@ -104,5 +128,5 @@ def search_similar_faces(query_embedding: List[float], limit: int = 5, score_thr
             })
         return results
     except Exception as e:
-        logger.warning(f"[Qdrant] Search error: {e}")
+        logger.debug(f"[Qdrant] Search note: {e}")
         return []

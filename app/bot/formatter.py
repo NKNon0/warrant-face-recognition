@@ -18,9 +18,10 @@ def format_face_result(result: dict, detected_at: str) -> str:
 def format_plate_result(result: dict, detected_at: str) -> str:
     """สร้างข้อความผลลัพธ์การตรวจพบป้ายทะเบียนรถเฝ้าระวัง"""
     score = result.get("score", 95.0)
+    plate_type = result.get("plate_type_label", "🚗 ป้ายทะเบียนรถ")
     text = (
         f"🚨 <b>ผลการตรวจพบป้ายทะเบียนรถเฝ้าระวัง!</b>\n"
-        f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 🚗 ป้ายทะเบียนรถ\n"
+        f"🔍 <b>ประเภทป้ายที่ AI ตรวจพบ:</b> {plate_type}\n"
         f"🚗 <b>ป้ายทะเบียน:</b> {result.get('plate_text', '-')}\n"
         f"📍 <b>จังหวัด:</b> {result.get('province', '-')}\n"
         f"🚨 <b>หมวดหมู่:</b> {result.get('category', '-')}\n"

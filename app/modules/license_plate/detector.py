@@ -119,3 +119,50 @@ def preprocess_license_plate_image(img_bgr: np.ndarray) -> list[np.ndarray]:
     candidate_crops.append(deskewed_img)
     candidate_crops.append(clahe_img)
     return candidate_crops
+
+
+def classify_license_plate_type(plate_crop_bgr: np.ndarray) -> tuple[str, str]:
+    """
+    จำแนกประเภทป้ายทะเบียน 4 รูปแบบตามขอบเขตงานวิจัย (4-Class License Plate Classification):
+    1. 'car_normal'        -> 🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)
+    2. 'motorcycle_normal' -> 🛵 รถจักรยานยนต์ - ป้ายขาวปกติ (Motorcycle - Normal Plate)
+    3. 'car_red'           -> 🚗 รถยนต์ - ป้ายแดง (Car - Red Plate)
+    4. 'motorcycle_red'    -> 🛵 รถจักรยานยนต์ - ป้ายแดง (Motorcycle - Red Plate)
+    คืนค่าเป็น (type_code, type_label_th)
+    """
+    if plate_crop_bgr is None or plate_crop_bgr.size == 0:
+        return "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
+
+    h, w = plate_crop_bgr.shape[:2]
+    aspect_ratio = float(w) / float(h) if h > 0 else 2.0
+
+    # ตรวจสอบสีพื้นหลังป้ายทะเบียน (HSV Color Space)
+    # ป้ายแดง: สีแดงมี Hue ในช่วง [0, 12] และ [165, 180], Saturation > 60, Value > 60
+    hsv = cv2.cvtColor(plate_crop_bgr, cv2.COLOR_BGR2HSV)
+    lower_red1 = np.array([0, 60, 60])
+    upper_red1 = np.array([12, 255, 255])
+    lower_red2 = np.array([165, 60, 60])
+    upper_red2 = np.array([180, 255, 255])
+
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+    red_mask = mask1 | mask2
+
+    red_pixel_ratio = float(np.count_nonzero(red_mask)) / float(h * w) if (h * w) > 0 else 0.0
+    is_red_plate = (red_pixel_ratio >= 0.20)
+
+    # ตรวจสอบประเภทยานพาหนะจากสัดส่วนป้าย (Aspect Ratio)
+    # ป้ายรถยนต์ (สี่เหลี่ยมผืนผ้าแนวยาว): Aspect Ratio >= 1.60 (มาตรฐาน ~ 2.0 - 2.5)
+    # ป้ายรถจักรยานยนต์ (ทรงเกือบจัตุรัส / 3 บรรทัด): Aspect Ratio < 1.60 (มาตรฐาน ~ 1.0 - 1.4)
+    is_motorcycle = (aspect_ratio < 1.60)
+
+    if is_motorcycle:
+        if is_red_plate:
+            return "motorcycle_red", "🛵 รถจักรยานยนต์ - ป้ายแดง (Motorcycle - Red Plate)"
+        else:
+            return "motorcycle_normal", "🛵 รถจักรยานยนต์ - ป้ายขาวปกติ (Motorcycle - Normal Plate)"
+    else:
+        if is_red_plate:
+            return "car_red", "🚗 รถยนต์ - ป้ายแดง (Car - Red Plate)"
+        else:
+            return "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"

@@ -127,26 +127,34 @@
 
 ---
 
-## 6. 📖 คู่มือการใช้งานสำหรับเจ้าหน้าที่ตำรวจ (User Guide)
+## 6. 📖 คู่มือการใช้งานสำหรับเจ้าหน้าที่ตำรวจ (User Guide - Direct Chat Mode)
 
 1. เปิดแอป Telegram เข้าไปที่แชทบอท **`@Nontdanu_bot`**
-2. กดปุ่มเมนู **`MiniApp`** ที่มุมล่างซ้าย หรือพิมพ์คำสั่ง `/start` แล้วกดปุ่ม **`🚀 เปิดระบบสแกน MiniApp`**
-3. หน้าจอ Mini App จะเปิดขึ้นมา ให้เลือกโหมดการสแกน:
-   * 👤 **สแกนใบหน้า:** สำหรับตรวจค้นบุคคลต้องสงสัย
-   * 🚗 **สแกนป้ายทะเบียน:** สำหรับตรวจค้นรถยนต์ต้องสงสัย/รถชนแล้วหนี
-   * 🪪 **สแกนบัตรประชาชน:** สำหรับตรวจสอบเลขบัตร 13 หลักกับฐานข้อมูลหมายจับ
-4. กดปุ่ม **`📸 ถ่ายรูปสด`** หรือ **`📷 กล้องระบบ`** เพื่อทำการถ่ายภาพ
-5. ตรวจสอบผลลัพธ์ หากพบบุคคลหรือรถที่มีหมายจับ สามารถกดปุ่ม **`📩 ส่งข้อมูลเข้าแชทบอท`** เพื่อบันทึกพยานหลักฐานและรายงานผลเข้าห้องแชททันที
+2. พิมพ์คำสั่ง `/start` เพื่อเริ่มต้นการทำงาน
+3. ส่งรูปภาพเข้ามาในห้องแชทได้โดยตรงทันที (Direct Photo Processing):
+   * 👤 **ภาพถ่ายใบหน้าบุคคล:** ระบบจะค้นหาเปรียบเทียบใบหน้ากับฐานข้อมูลหมายจับ (ArcFace 512D Vector + Cosine Similarity)
+   * 🚗 **ภาพถ่ายป้ายทะเบียนรถ:** ระบบจะตรวจจับกรอบป้าย (YOLOv8 Fast-ALPR) และอ่านตัวเลขทะเบียนด้วย PaddleOCR / Tesseract
+   * 🪪 **ภาพถ่ายบัตรประชาชน:** ระบบจะสกัดเลข 13 หลัก (Thai ID Top-Right ROI) และตรวจสอบชื่อ-สกุลกับหมายจับ
+4. ระบบ AI จะจำแนกประเภทอัตโนมัติ (Multi-Modal Auto-Classifier < 100ms) และส่งการ์ดรายงานผล HTML พร้อมรูปถ่ายผู้ต้องหาและเปอร์เซ็นต์ความคล้ายคลึงกลับมาในห้องแชททันที
 
 ---
 
 ## 7. 🛠️ เทคโนโลยีและเครื่องมือที่ใช้ในการพัฒนา (Tech Stack & Implementation)
 
-* **Frontend:** HTML5, Vanilla JavaScript (ES6+), CSS3 (Modern Dark Glassmorphism Design), WebRTC Camera API, Telegram WebApp SDK
-* **Backend Framework:** Python 3.11, FastAPI, Uvicorn (ASGI), Asyncio, Aiohttp, AioMySQL
+* **Architecture:** Domain-Driven Modular Clean Architecture, Strict Engine Isolation
+* **Backend Framework:** Python 3.11/3.13, FastAPI, Uvicorn (ASGI), Asyncio, Aiohttp, AioMySQL
 * **AI Engine & Computer Vision:**
-  * **InsightFace (ArcFace ResNet50 / ONNX Runtime):** สำหรับสกัดเวกเตอร์ใบหน้า 512 มิติ
-  * **Ultralytics YOLOv8:** สำหรับตรวจจับตำแหน่งป้ายทะเบียนรถ
-  * **OpenCV (cv2):** สำหรับการประมวลผลภาพ (CLAHE, Resize, Thresholding, Grayscale)
-  * **PyTesseract (Tesseract-OCR):** สำหรับอ่านตัวอักษรและตัวเลขไทย/อังกฤษ
-* **Database & Infrastructure:** MySQL 8.0, phpMyAdmin, Docker Compose, Cloudflare Tunnel (`cloudflared`), Telegram Bot API
+  * **InsightFace (ArcFace ResNet50 / ONNX Runtime `buffalo_l`):** สกัด Deep Feature Vector 512 มิติ
+  * **Ultralytics YOLOv8 (Fast-ALPR):** ตรวจจับตำแหน่งป้ายทะเบียนรถ
+  * **PaddleOCR (Thai Language Model) & PyTesseract:** สกัดตัวอักษรและตัวเลขป้ายทะเบียนและบัตรประชาชน
+  * **OpenCV (cv2):** ประมวลผลภาพ (CLAHE, Top-Hat Filter, Perspective Warp, Morphological Enhancement)
+* **Database & Infrastructure:** MySQL 8.0, Qdrant Vector Database (512D HNSW Index), phpMyAdmin, Docker Compose, Telegram Bot API (Long Polling Engine)
+
+---
+
+## 8. 📊 แผนการทดสอบและแบบประเมินผลเชิงวิชาการ (Academic Evaluation & Test Protocol Sheets)
+
+ได้จัดทำระเบียบวิธีการทดสอบตามข้อเสนอแนะของคณะกรรมการ พร้อมแบบฟอร์มการบันทึกผลและแบบสอบถามความพึงพอใจอย่างครบถ้วน:
+* **[ACADEMIC_TEST_FORMS.md](file:///c:/Users/n/OneDrive/Desktop/projectnew/flie/ACADEMIC_TEST_FORMS.md):** แบบฟอร์มบันทึกผลการทดลอง 5 ชุด และแบบสอบถามความพึงพอใจ 5 ระดับ (Likert Scale)
+* **[ACADEMIC_EVALUATION_REPORT.md](file:///c:/Users/n/OneDrive/Desktop/projectnew/flie/ACADEMIC_EVALUATION_REPORT.md):** รายงานผลการประเมินประสิทธิภาพเชิงตัวเลขและสถิติเปรียบเทียบกับเกณฑ์ผ่านทั้งหมด 9 ตัวชี้วัดหลัก
+

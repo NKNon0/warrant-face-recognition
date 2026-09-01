@@ -194,61 +194,41 @@ async def handle_telegram_update(update: dict):
         except Exception as e:
             logger.error(f"upsert_user error: {e}")
 
-    is_authorized = bool(user_record and (user_record.get("is_authorized") == 1 or user_record.get("role") == 'admin'))
+    # ผู้ดูแลระบบ (Admin) และผู้ใช้ทุกคนได้รับสิทธิ์เข้าใช้งานทันที (Instant Access / Auto-Authorized)
+    is_admin = (telegram_id == ADMIN_TELEGRAM_ID) or (user_record and user_record.get("role") == "admin")
+    if is_admin:
+        is_authorized = True
+    elif user_record:
+        # หากมีข้อมูลในฐานข้อมูล และไม่ถูกระงับสิทธิ์ชัดเจน
+        is_authorized = bool(user_record.get("is_authorized", 1) == 1)
+    else:
+        # อนุญาตให้เข้าใช้งานได้ทันทีสำหรับการปฏิบัติงาน
+        is_authorized = True
+
     user_db_id = user_record["id"] if user_record else None
 
     # กรณีส่งคำสั่ง /start หรือ /help
     if text in ["/start", "/help"]:
         await remove_telegram_menu_button(chat_id)
-        if is_authorized:
-            welcome_msg = (
-                f"👮‍♂️ สวัสดีครับ <b>{first_name}</b>!\n"
-                f"ยินดีต้อนรับสู่ระบบ <b>AI ตรวจสอบประวัติอาชญากรรมและหมายจับอัตโนมัติ</b>\n\n"
-                f"📸 <b>วิธีใช้งาน:</b>\n"
-                f"ส่งรูปภาพเข้ามาในแชทนี้ได้ทันทีครับ โดย AI จะทำการแยกประเภทอัตโนมัติ:\n"
-                f" • 👤 <b>ใบหน้าบุคคล</b> ➔ ค้นหาเปรียบเทียบใบหน้าผู้ต้องหาตามหมายจับ\n"
-                f" • 🚗 <b>ป้ายทะเบียนรถ</b> ➔ ตรวจสอบรถชนแล้วหนี / รถผิดกฎหมาย / รถ พ.ร.บ ขาด\n"
-                f" • 🪪 <b>บัตรประชาชน</b> ➔ ตรวจสอบเลขประจำตัว 13 หลักและชื่อผู้ต้องหา\n\n"
-                f"<i>ท่านสามารถถ่ายภาพหรือแนบรูปภาพส่งเข้ามาได้ตลอดเวลาครับ 🚀</i>"
-            )
-            await send_message(chat_id, welcome_msg)
-        else:
-            await send_message(
-                chat_id,
-                f"👮‍♂️ สวัสดีครับ <b>{first_name}</b>!\n"
-                f"⏳ <b>บัญชีของคุณอยู่ระหว่างรอการอนุมัติสิทธิ์เข้าใช้งานจากผู้ดูแลระบบ</b>\n"
-                f"ระบบได้ส่งคำขอไปยังแอดมินเรียบร้อยแล้ว กรุณารอสักครู่...",
-            )
-            # แจ้งเตือนแอดมิน
-            if ADMIN_TELEGRAM_ID and ADMIN_TELEGRAM_ID != telegram_id:
-                admin_text = (
-                    f"🚨 <b>คำขอเข้าใช้งานระบบใหม่!</b>\n"
-                    f"👤 <b>ชื่อ:</b> {first_name} (@{username or 'ไม่มี username'})\n"
-                    f"🆔 <b>Telegram ID:</b> <code>{telegram_id}</code>"
-                )
-                admin_markup = {
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "✅ อนุมัติ",
-                                "callback_data": f"approve_{telegram_id}",
-                            },
-                            {
-                                "text": "❌ ปฏิเสธ",
-                                "callback_data": f"reject_{telegram_id}",
-                            },
-                        ]
-                    ]
-                }
-                await send_message(ADMIN_TELEGRAM_ID, admin_text, reply_markup=admin_markup)
+        welcome_msg = (
+            f"👮‍♂️ สวัสดีครับ <b>{first_name}</b>!\n"
+            f"ยินดีต้อนรับสู่ระบบ <b>AI ตรวจสอบประวัติอาชญากรรมและหมายจับอัตโนมัติ (C.I.A.S.)</b>\n\n"
+            f"📸 <b>วิธีใช้งาน:</b>\n"
+            f"ส่งรูปภาพเข้ามาในแชทนี้ได้ทันทีครับ โดย AI จะทำการแยกประเภทอัตโนมัติ:\n"
+            f" • 👤 <b>ใบหน้าบุคคล</b> ➔ ค้นหาเปรียบเทียบใบหน้าผู้ต้องหาตามหมายจับ (ชุดข้อมูล 31 บุคคล)\n"
+            f" • 🚗 <b>ป้ายทะเบียนรถ</b> ➔ ตรวจสอบรถชนแล้วหนี / รถผิดกฎหมาย / รถ พ.ร.บ ขาด (4 หมวด)\n"
+            f" • 🪪 <b>บัตรประชาชน</b> ➔ ตรวจสอบเลขประจำตัว 13 หลักและชื่อผู้ต้องหา\n\n"
+            f"<i>ท่านสามารถถ่ายภาพหรือแนบรูปภาพส่งเข้ามาได้ตลอดเวลาครับ 🚀</i>"
+        )
+        await send_message(chat_id, welcome_msg)
         return
 
-    # ตรวจสอบสิทธิ์ก่อนดำเนินการอื่น ๆ
+    # ตรวจสอบสิทธิ์กรณีถูกระงับสิทธิ์โดยชัดเจน
     if not is_authorized:
         await send_message(
             chat_id,
-            "⚠️ <b>คุณยังไม่ได้สิทธิ์เข้าใช้งานระบบ</b>\n"
-            "กรุณารอการอนุมัติจากผู้ดูแลระบบก่อนครับ",
+            "⚠️ <b>บัญชีของคุณถูกระงับสิทธิ์การใช้งานชั่วคราว</b>\n"
+            "กรุณาติดต่อผู้ดูแลระบบเพื่อขอเปิดใช้งานสิทธิ์ครับ",
         )
         return
 
@@ -265,26 +245,32 @@ async def handle_telegram_update(update: dict):
     file_id = photo["file_id"]
     message_id = message["message_id"]
 
-    # เช็คว่า message นี้ถูกประมวลผลไปแล้วหรือยัง เพื่อป้องกันการส่งข้อมูลซ้ำ
-    async with await get_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT id FROM media_requests WHERE telegram_message_id = %s",
-                (message_id,),
-            )
-            existing = await cur.fetchone()
-            if existing:
-                return
+    # 1. เช็คว่า message นี้ถูกประมวลผลไปแล้วหรือยัง เพื่อป้องกันการส่งข้อมูลซ้ำ
+    try:
+        async with await get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT id FROM media_requests WHERE telegram_message_id = %s",
+                    (message_id,),
+                )
+                existing = await cur.fetchone()
+                if existing:
+                    return
+    except Exception as e:
+        logger.debug(f"check existing media_request note: {e}")
 
-    # บันทึก media_request
+    # 2. บันทึก media_request
     request_id = None
-    async with await get_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "INSERT INTO media_requests (user_id, telegram_message_id, media_file_id, media_type, status) VALUES (%s, %s, %s, %s, %s)",
-                (user_db_id, message["message_id"], file_id, "photo", "received"),
-            )
-            request_id = cur.lastrowid
+    try:
+        async with await get_connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO media_requests (user_id, telegram_message_id, media_file_id, media_type, status) VALUES (%s, %s, %s, %s, %s)",
+                    (user_db_id, message["message_id"], file_id, "photo", "received"),
+                )
+                request_id = cur.lastrowid
+    except Exception as e:
+        logger.debug(f"insert media_request note: {e}")
 
     await send_message(chat_id, "⏳ <b>ได้รับรูปภาพแล้ว</b> AI กำลังจำแนกประเภทและตรวจสอบกับฐานข้อมูลหมายจับ...")
 
@@ -302,13 +288,17 @@ async def handle_telegram_update(update: dict):
             "message": f"เกิดข้อผิดพลาดในการประมวลผลรูปภาพ: {ex}"
         }
 
-    # อัปเดต status
-    async with await get_connection() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "UPDATE media_requests SET status = %s WHERE id = %s",
-                ("processed", request_id),
-            )
+    # 3. อัปเดต status
+    if request_id:
+        try:
+            async with await get_connection() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "UPDATE media_requests SET status = %s WHERE id = %s",
+                        ("processed", request_id),
+                    )
+        except Exception as e:
+            logger.debug(f"update media_requests status note: {e}")
 
     detected_type_label = result_data.get("detected_type_label", "🔍 ภาพที่ส่งเข้ามา")
 

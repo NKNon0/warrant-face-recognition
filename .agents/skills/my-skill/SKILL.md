@@ -1,69 +1,62 @@
 ---
-name: warrant-ai-direct-bot
+name: C.I.A.S (Criminal Identification Automated System)
 description: >-
-  Operational runbook for the Warrant & AI Recognition Direct Telegram Bot (Auto Multi-Modal Classifier for Face, License Plate, and Thai ID Card).
-  Use this skill whenever the user asks to start the Telegram bot, run polling mode, train AI datasets, verify auto-classification,
-  or troubleshoot direct photo processing in chat.
+  คู่มือการปฏิบัติงาน (Runbook) สำหรับ Telegram Bot ระบบ C.I.A.S (Criminal Identification Automated System) ตรวจสอบหมายจับและการรู้จำด้วย AI แบบส่งตรงในแชท (Auto Multi-Modal Classifier ตรวจจับใบหน้า, ป้ายทะเบียน และบัตรประชาชน). ใช้คู่มือนี้เมื่อผู้ใช้ต้องการเปิดบอต Telegram, รันโหมด Polling, เทรนชุดข้อมูล AI, ทดสอบระบบจำแนกประเภทอัตโนมัติ หรือแก้ปัญหาการประมวลผลรูปภาพในแชท.
 ---
 
-# Warrant AI Recognition Direct Bot Runbook (`warrant-ai-direct-bot`)
+## 📌 กฎและระเบียบปฏิบัติงานหลัก 8 ข้อ (Core Operational Directives)
 
-This skill documents the **Direct Chat & Auto-Classification Architecture** for the Warrant & AI Recognition System (`NKNon0/warrant-face-recognition`).
+1. **การส่งรูปภาพเข้าแชทโดยตรง (Direct Chat Architecture):**
+   * ผู้ใช้งานสามารถส่งรูปภาพเข้ามาในแชท Telegram Bot (`@Nontdanu_bot`) ได้โดยตรงทันที ไม่ต้องผ่าน MiniApp หรือ Web UI ภายนอก
+
+2. **ระบบตรวจสอบสำรองป้องกันความผิดพลาด (Zero False Negative Fallback Cascade):**
+   * หากระบบ AI คัดกรองประเภทเบื้องต้น (Primary Classifier) ตรวจสอบแล้วไม่พบข้อมูลหมายจับที่ตรงกัน ระบบจะนำภาพไปส่งตรวจเช็คซ้ำกับโมเดลอีก 2 ส่วนที่เหลือ (ใบหน้า / ป้ายทะเบียน / บัตรประชาชน) โดยอัตโนมัติก่อนที่จะสรุปผลและส่งค่าคืนให้ผู้ใช้งาน
+
+3. **การตรวจสอบและเปิดเซิร์ฟเวอร์อัตโนมัติ (Auto Server Health Check & Startup):**
+   * หลังจากเรียกใช้คำสั่งหรือโหลด Skill นี้ ต้องตรวจสอบสถานะการเปิดเซิร์ฟเวอร์และการทำงานของบอทเสมอ หากพบว่าเซิร์ฟเวอร์หรือบอทยังไม่ได้เปิด ให้ดำเนินการเปิดเซิร์ฟเวอร์/รันโหมด Polling ทันที (`python run_polling.py`)
+
+4. **นโยบายความปลอดภัยข้อมูล PDPA และการนำขึ้น GitHub (Strict GitHub Push & PDPA Policy):**
+   * **ห้ามอัปโหลดโค้ดขึ้น GitHub เด็ดขาดหากผู้ใช้งานไม่ได้สั่ง**
+   * หากผู้ใช้งานมีคำสั่งให้อัปโหลดขึ้น GitHub **ต้องทำการตรวจสอบไฟล์ทั้งหมดก่อนเสมอ** ว่ามีข้อมูลที่ผิดกฎหมาย PDPA หรือมีไฟล์ฐานข้อมูล (Database / `.env` / ข้อมูลชีวมิติ / ภาพผู้ต้องหาจริง) หรือไม่
+   * หากตรวจพบว่ามีไฟล์ที่ติด Database หรือ PDPA **ต้องแจ้งเตือนผู้ใช้งานให้ทราบทันทีว่าติด Database/PDPA และรอการยืนยันก่อนดำเนินการ**
+
+5. **มาตรฐานการแสดงผลข้อความในแชท (Response Format & Clean UX):**
+   * **แท็กระบุประเภทภาพ:** ข้อความตอบกลับในแชท Telegram ทุกครั้งจะต้องระบุประเภทภาพที่ตรวจพบให้ชัดเจน:
+     * `🔍 ประเภทภาพที่ AI ตรวจพบ: 👤 ใบหน้าบุคคล` หรือ `🚗 ป้ายทะเบียนรถ` หรือ `🪪 บัตรประจำตัวประชาชน`
+   * **ความละเอียดของคะแนน:** แสดงคะแนนความตรงกัน (Match Score) เป็นเลขทศนิยม 2 ตำแหน่งเสมอ (เช่น `98.45%`, `99.85%`)
+   * **การแสดงผลที่เรียบง่ายและเป็นระเบียบ (Clean UX):** ไม่ต้องมีลิงก์เว็บไซต์หรือปุ่มเปิด MiniApp ข้อมูลผลลัพธ์ทั้งหมดจะถูกส่งกลับมาในรูปแบบการ์ดข้อความ Rich HTML พร้อมรูปถ่ายผู้ต้องสงสัยลงในแชทโดยตรง
+
+6. **การทำงานต่อเนื่องอัตโนมัติ (Autonomous Workflow):**
+   * Skill นี้สามารถดำเนินการทำงานตามขั้นตอนการประมวลผล สแกน และตอบสนองได้อย่างต่อเนื่องเมื่อผู้ใช้งานเรียกใช้ โดยไม่ต้องหยุดขออนุมัติในขั้นตอนย่อยทั่วไป
+
+7. **คำสั่งตรวจสอบและเทรนชุดข้อมูล AI (`trainai`):**
+   * หากมีการเรียกใช้คำสั่งเทรน AI (เช่น `/skill.md.tranai` หรือการสั่งเทรน AI):
+     * ให้ทำการตรวจสอบโฟลเดอร์ `datatest/` ว่ามีการเพิ่มข้อมูล, โฟลเดอร์, หรือภาพมาใหม่หรือไม่
+     * นับจำนวนไฟล์และสรุปรายละเอียดส่งคืนให้ผู้ใช้งานทราบ
+     * **ต้องรอการอนุมัติจากผู้ใช้งานก่อนเริ่มการเทรน AI / อัปเดตฐานข้อมูลเวกเตอร์จริง**
+
+8. **การสอบถามการนำโค้ดขึ้น GitHub ตอนปิดงาน (End-of-Task GitHub Prompt):**
+   * ในการทำงานแต่ละครั้งเมื่อเสร็จสิ้นภารกิจ **ต้องสอบถามผู้ใช้งานทุกครั้งเสมอว่าต้องการให้อัปโหลดโค้ดขึ้น GitHub หรือไม่**
+
+9. **ข้อกำหนดการสร้างและบันทึกไฟล์ (File Creation & Storage Policy):**
+   * หากผู้ใช้งานสั่งให้สร้างไฟล์ ให้ดำเนินการสร้างเพียง **1 ครั้งเท่านั้น** และต้องบันทึกไฟล์ลงในโฟลเดอร์ `flie/` (`c:\Users\n\OneDrive\Desktop\projectnew\flie`) เท่านั้น
 
 ---
 
-## 🏗️ 1. Architecture Overview (Direct Bot & Auto-Classification)
+## 🚀 คำสั่งหลักในการปฏิบัติงาน (Operational Workflows & Commands)
 
-* **No MiniApp / No Web UI**: Users send photos directly into the Telegram bot chat (`@Nontdanu_bot`).
-* **Auto Multi-Modal Classifier (`classify_image_type`)**:
-  * 👤 **Face (`face`)**: Detected via InsightFace (buffalo_l) / Facial Landmarks ➔ Searched via Qdrant HNSW 512D Vector Index & MySQL `face_profiles`.
-  * 🚗 **License Plate (`plate`)**: Detected via YOLOv8 Fast-ALPR + Aspect Ratio ➔ OCR via PaddleOCR Thai + Homography Warp & Levenshtein Distance in `license_plates`.
-  * 🪪 **Thai ID Card (`idcard`)**: Detected via 13-digit Top-Right ROI / Thai ID layout ➔ OCR via Top-Hat Filter + Fuzzy Name & 13-Digit Search in `warrants` / `id_cards`.
-* **Zero False Negative Fallback Cascade**: If the primary predicted engine finds no match, the system automatically checks the other two engines before concluding no match.
-
----
-
-## 🚀 2. Bot Execution Workflows
-
-### Option A: Standalone Polling Mode (No Tunnel / No Port Forwarding Required)
-Run anywhere on your local machine or server:
+### 1. การเปิดเซิร์ฟเวอร์บอท (Start Telegram Bot Server)
 ```bash
 python run_polling.py
 ```
-* Or inside Docker:
+*(หรือรันผ่าน Docker: `docker compose up -d` หรือ `docker compose exec web python run_polling.py`)*
+
+### 2. การตรวจสอบและเทรนชุดข้อมูล AI ทั้งหมด (Train & Sync AI Models)
 ```bash
-docker compose exec web python run_polling.py
+python scratch/master_train_all_ai.py
 ```
 
-### Option B: Docker Container Service
-```bash
-docker compose up -d
-```
-
----
-
-## 🧠 3. AI Training & Dataset Synchronization
-
-Whenever new suspect photos, license plate records, or ID card data are added:
-```bash
-docker compose exec web python scratch/master_train_all_ai.py
-```
-*(Or run `python scratch/master_train_all_ai.py` on the host).*
-
----
-
-## 🧪 4. Automated Testing & Verification
-
-Verify the Multi-Modal Auto-Classifier and Auto-Routing:
+### 3. การทดสอบระบบจำแนกประเภทและเส้นทางประมวลผลอัตโนมัติ (Verify Auto-Classifier)
 ```bash
 python scratch/test_auto_classifier.py
 ```
-
----
-
-## 🛡️ 5. Golden Rules for Responses
-
-1. **Auto-Classification Tag**: Every Telegram chat response must clearly state the detected category:
-   * 🔍 **ประเภทภาพที่ AI ตรวจพบ:** 👤 ใบหน้าบุคคล / 🚗 ป้ายทะเบียนรถ / 🪪 บัตรประจำตัวประชาชน
-2. **Score Precision**: Always display match scores to **2 decimal places** (e.g. `98.45%`, `99.85%`).
-3. **Clean UX**: No web links or MiniApp buttons. All results are delivered as rich HTML text cards with suspect photos directly in chat.

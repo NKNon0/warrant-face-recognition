@@ -1,6 +1,7 @@
 from .detector import (
     get_yolo_plate_model,
     preprocess_license_plate_image,
+    classify_license_plate_type,
 )
 from .preprocessor import (
     apply_laplacian_unsharp_mask,
@@ -20,6 +21,7 @@ from .matcher import (
 __all__ = [
     "get_yolo_plate_model",
     "preprocess_license_plate_image",
+    "classify_license_plate_type",
     "apply_laplacian_unsharp_mask",
     "enhance_faded_text_contrast",
     "align_and_deskew_quadrilateral",

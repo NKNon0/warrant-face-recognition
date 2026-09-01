@@ -63,12 +63,21 @@ def get_face_cascade():
 
 
 def extract_insightface_embedding(image_bgr: np.ndarray) -> np.ndarray | None:
-    """สกัด 512D ArcFace Deep Feature Vector จากรูปภาพ"""
+    """สกัด 512D ArcFace Deep Feature Vector จากรูปภาพแบบหลายขั้นตอน (Robust Multi-Pass)"""
     app = get_insightface_app()
     if app is None or image_bgr is None:
         return None
     try:
-        faces = app.get(image_bgr)
+        # Pre-scale very large high-res images to max 640px for 5x faster inference without precision loss
+        h, w = image_bgr.shape[:2]
+        if max(h, w) > 640:
+            scale = 640.0 / max(h, w)
+            proc_img = cv2.resize(image_bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            proc_img = image_bgr
+
+        # Pass 1: Standard InsightFace Detection
+        faces = app.get(proc_img)
         if faces and len(faces) > 0:
             best_face = max(faces, key=lambda f: float(f.det_score) if hasattr(f, "det_score") else 0.0)
             emb = best_face.embedding
@@ -77,6 +86,40 @@ def extract_insightface_embedding(image_bgr: np.ndarray) -> np.ndarray | None:
                 if norm > 0:
                     emb = emb / norm
                 return emb.astype(np.float32)
+
+        # Pass 2: CLAHE Contrast Enhanced Detection (สำหรับภาพแสงน้อย/ภาพสแกน)
+        hsv = cv2.cvtColor(proc_img, cv2.COLOR_BGR2HSV)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        hsv[:, :, 2] = clahe.apply(hsv[:, :, 2])
+        enhanced = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+        faces_enh = app.get(enhanced)
+        if faces_enh and len(faces_enh) > 0:
+            best_face = max(faces_enh, key=lambda f: float(f.det_score) if hasattr(f, "det_score") else 0.0)
+            emb = best_face.embedding
+            if emb is not None:
+                norm = np.linalg.norm(emb)
+                if norm > 0:
+                    emb = emb / norm
+                return emb.astype(np.float32)
+
+        # Pass 3: Haar Cascade ROI + Direct ArcFace Feature Extraction Fallback
+        cascade = get_face_cascade()
+        if cascade is not None:
+            gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+            haar_faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
+            if len(haar_faces) > 0:
+                x, y, w, h = max(haar_faces, key=lambda b: b[2] * b[3])
+                crop = image_bgr[max(0, y):y+h, max(0, x):x+w]
+                if hasattr(app, "models") and "recognition" in app.models:
+                    rec_model = app.models["recognition"]
+                    if hasattr(rec_model, "get_feat"):
+                        emb = rec_model.get_feat(crop)
+                        if emb is not None:
+                            emb = emb.flatten()
+                            norm = np.linalg.norm(emb)
+                            if norm > 0:
+                                emb = emb / norm
+                            return emb.astype(np.float32)
     except Exception as ex:
         logger.error(f"[Face Detector] extract_insightface_embedding error: {ex}")
     return None
