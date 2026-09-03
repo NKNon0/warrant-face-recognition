@@ -66,6 +66,24 @@ async def find_license_plate(text: str) -> dict | None:
             db_prov = normalize_license_plate_text(p.get("province", ""))
             full_db_text = f"{db_plate}{db_prov}"
 
+            # 0. Smart Thai Plate Structure Match (Letters + Digits Layout Agnostic)
+            q_digits = "".join(re.findall(r"\d+", clean_query))
+            q_thai = "".join(re.findall(r"[ก-ฮ]+", clean_query))
+            db_digits = "".join(re.findall(r"\d+", db_plate))
+            db_thai = "".join(re.findall(r"[ก-ฮ]+", db_plate))
+
+            if db_digits and db_digits == q_digits and db_thai and db_thai in q_thai:
+                return {
+                    "type": "plate",
+                    "id": p["id"],
+                    "plate_text": p.get("plate_text", "-"),
+                    "province": p.get("province", "-"),
+                    "detail": p.get("detail", "-"),
+                    "station": p.get("station", "-"),
+                    "category": p.get("category", "-"),
+                    "score": 99.85,
+                }
+
             # 1. Exact Match
             if db_plate and db_plate == clean_query:
                 return {

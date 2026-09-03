@@ -1,20 +1,35 @@
 import logging
+import re
 import cv2
-import pytesseract
 from app.modules.face.detector import cv2_imread_unicode, get_insightface_app, detect_and_crop_face
 from app.modules.license_plate.detector import get_yolo_plate_model
+from app.modules.license_plate.ocr_engine import get_paddleocr_engine, extract_paddle_text
 from app.modules.id_card.parser import extract_id_number
 
 logger = logging.getLogger(__name__)
+
+# รายชื่อจังหวัดของไทยสำหรับระบุป้ายทะเบียน
+THAI_PROVINCES = [
+    "กรุงเทพ", "กรุงเทพมหานคร", "กระบี่", "กาญจนบุรี", "กาฬสินธุ์", "กำแพงเพชร", "ขอนแก่น",
+    "จันทบุรี", "ฉะเชิงเทรา", "ชลบุรี", "ชัยนาท", "ชัยภูมิ", "ชุมพร", "เชียงราย", "เชียงใหม่",
+    "ตรัง", "ตราด", "ตาก", "นครนายก", "นครปฐม", "นครพนม", "นครราชสีมา", "นครศรีธรรมราช",
+    "นครสวรรค์", "นนทบุรี", "นราธิวาส", "น่าน", "บึงกาฬ", "บุรีรัมย์", "ปทุมธานี", "ประจวบคีรีขันธ์",
+    "ปราจีนบุรี", "ปัตตานี", "พระนครศรีอยุธยา", "พะเยา", "พังงา", "พัทลุง", "พิจิตร", "พิษณุโลก",
+    "เพชรบุรี", "เพชรบูรณ์", "แพร่", "ภูเก็ต", "มหาสารคาม", "มุกดาหาร", "แม่ฮ่องสอน", "ยโสธร",
+    "ยะลา", "ร้อยเอ็ด", "ระนอง", "ระยอง", "ราชบุรี", "ลพบุรี", "ลำปาง", "ลำพูน", "เลย", "ศรีสะเกษ",
+    "สกลนคร", "สงขลา", "สตูล", "สมุทรปราการ", "สมุทรสงคราม", "สมุทรสาคร", "สระแก้ว", "สระบุรี",
+    "สิงห์บุรี", "สุโขทัย", "สุพรรณบุรี", "สุราษฎร์ธานี", "สุรินทร์", "หนองคาย", "หนองบัวลำภู",
+    "อ่างทอง", "อำนาจเจริญ", "อุดรธานี", "อุตรดิตถ์", "อุทัยธานี", "อุบลราชธานี"
+]
 
 
 def classify_image_type(image_path: str) -> tuple[str, float]:
     """
     AI Multi-Modal Image Classifier:
-    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ (ความเร็วสูงพิเศษ < 100ms):
-    1. 'face'   -> 👤 ใบหน้าบุคคลต้องสงสัย
-    2. 'idcard' -> 🪪 บัตรประจำตัวประชาชน
-    3. 'plate'  -> 🚗 ป้ายทะเบียนรถยนต์/รถจักรยานยนต์
+    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ (ความเร็วสูงพิเศษ):
+    1. 'idcard' -> 🪪 บัตรประจำตัวประชาชน
+    2. 'plate'  -> 🚗 ป้ายทะเบียนรถยนต์/รถจักรยานยนต์
+    3. 'face'   -> 👤 ใบหน้าบุคคลต้องสงสัย
     คืนค่าเป็น (predicted_type, confidence_score)
     """
     try:
@@ -33,9 +48,62 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         else:
             quick_img = img
 
-        full_gray = cv2.cvtColor(quick_img, cv2.COLOR_BGR2GRAY)
+        # --- 1. ตรวจสอบข้อความด้วย PaddleOCR ก่อน ---
+        paddle_ocr = get_paddleocr_engine()
+        ocr_text = ""
+        if paddle_ocr is not None:
+            try:
+                res = paddle_ocr.ocr(quick_img)
+                ocr_text = extract_paddle_text(res)
+            except Exception as e:
+                logger.debug(f"[Classifier] PaddleOCR check note: {e}")
 
-        # --- 1. ตรวจสอบ ใบหน้าบุคคล (Face Detection) ---
+        # ก) ตรวจสอบบัตรประชาชน (Thai ID Card)
+        id_keywords = [
+            "บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่",
+            "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ",
+            "Identification Number", "Date of Birth", "Date of Issue", "Date of Expiry"
+        ]
+        has_id_keyword = any(k in ocr_text for k in id_keywords)
+        has_13_digits = bool(extract_id_number(ocr_text))
+
+        if has_id_keyword or has_13_digits:
+            return "idcard", 0.98
+
+        # ข) ตรวจสอบป้ายทะเบียนรถ (License Plate) จากข้อความ
+        has_province = any(prov in ocr_text for prov in THAI_PROVINCES)
+        plate_text_clean = "".join(ch for ch in ocr_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
+        digits_in_text = re.findall(r"\d+", plate_text_clean)
+        thai_in_text = re.findall(r"[ก-ฮ]+", plate_text_clean)
+
+        is_plate_by_text = False
+        if has_province and (digits_in_text or thai_in_text):
+            is_plate_by_text = True
+        elif digits_in_text and thai_in_text:
+            if len(plate_text_clean) <= 25 and len(digits_in_text[0]) <= 4:
+                is_plate_by_text = True
+
+        if is_plate_by_text:
+            return "plate", 0.96
+
+        # ค) ตรวจสอบด้วย YOLO License Plate Detector (ถ้ามี)
+        yolo = get_yolo_plate_model()
+        if yolo is not None:
+            try:
+                y_res = yolo.predict(quick_img, verbose=False, conf=0.30)
+                if y_res and len(y_res) > 0 and len(y_res[0].boxes) > 0:
+                    box = y_res[0].boxes[0]
+                    conf = float(box.conf[0])
+                    bx1, by1, bx2, by2 = map(int, box.xyxy[0])
+                    bw = max(1, bx2 - bx1)
+                    bh = max(1, by2 - by1)
+                    box_ratio = float(bw) / float(bh)
+                    if box_ratio >= 1.2:
+                        return "plate", round(max(0.85, conf), 2)
+            except Exception:
+                pass
+
+        # --- 2. ตรวจสอบ ใบหน้าบุคคล (Face Detection) ---
         has_face = False
         face_conf = 0.0
         iface_app = get_insightface_app()
@@ -45,7 +113,7 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
                 if faces and len(faces) > 0:
                     best_face = max(faces, key=lambda f: float(f.det_score))
                     face_conf = float(best_face.det_score)
-                    if face_conf >= 0.50:
+                    if face_conf >= 0.45:
                         has_face = True
             except Exception:
                 pass
@@ -54,55 +122,23 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
             has_face = True
             face_conf = 0.80
 
-        # --- 2. ตรวจสอบ บัตรประชาชน (Thai ID Card Detection) ---
-        is_idcard = False
-        idcard_conf = 0.0
-        if 1.20 <= aspect_ratio <= 1.95:
-            try:
-                quick_text = pytesseract.image_to_string(full_gray, lang="tha+eng", config="--psm 6").strip()
-                id_keywords = ["บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่", "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ"]
-                keyword_matches = sum(1 for kw in id_keywords if kw in quick_text)
-
-                id_num_match = extract_id_number(quick_text)
-                if id_num_match or keyword_matches >= 2:
-                    is_idcard = True
-                    idcard_conf = 0.95
-                elif keyword_matches == 1:
-                    is_idcard = True
-                    idcard_conf = 0.85
-            except Exception:
-                pass
-
-        if is_idcard:
-            return "idcard", idcard_conf
-
         if has_face:
+            if 1.35 <= aspect_ratio <= 1.85 and (len(ocr_text) > 10):
+                return "idcard", 0.85
             return "face", round(max(0.85, face_conf), 2)
 
-        # --- 3. ตรวจสอบ ป้ายทะเบียนรถ (License Plate Detection) ---
-        yolo = get_yolo_plate_model()
-        if yolo is not None:
-            try:
-                y_res = yolo.predict(quick_img, verbose=False, conf=0.35)
-                if y_res and len(y_res) > 0 and len(y_res[0].boxes) > 0:
-                    box = y_res[0].boxes[0]
-                    conf = float(box.conf[0])
-                    bx1, by1, bx2, by2 = map(int, box.xyxy[0])
-                    bw = max(1, bx2 - bx1)
-                    bh = max(1, by2 - by1)
-                    box_ratio = float(bw) / float(bh)
-                    if box_ratio >= 1.5:
-                        return "plate", round(max(0.85, conf), 2)
-            except Exception:
-                pass
-
-        # --- 4. กฎสัดส่วนภาพ (Fallback Heuristics) ---
-        if aspect_ratio >= 2.0:
-            return "plate", 0.70
+        # --- 3. กฎสัดส่วนภาพและลักษณะเฉพาะ (Fallback Heuristics) ---
+        if aspect_ratio >= 1.8:
+            return "plate", 0.75
         elif 1.35 <= aspect_ratio <= 1.85:
-            return "idcard", 0.65
+            if len(ocr_text) >= 5:
+                return "idcard", 0.70
+            return "plate", 0.65
 
-        return "face", 0.60
+        if digits_in_text and len(plate_text_clean) <= 15:
+            return "plate", 0.75
+
+        return "face", 0.50
     except Exception as e:
         logger.error(f"[Classifier] classify_image_type error: {e}")
         return "face", 0.50

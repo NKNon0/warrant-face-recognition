@@ -20,6 +20,23 @@ except ImportError:
     PaddleOCR = None
 
 
+def extract_paddle_text(res) -> str:
+    """สกัดข้อความทั้งหมดจากผลลัพธ์ของ PaddleOCR รองรับทั้ง v5 rec_texts และรูปแบบดั้งเดิม"""
+    if not res:
+        return ""
+    texts = []
+    for page in res:
+        if isinstance(page, dict) and "rec_texts" in page:
+            texts.extend([str(t) for t in page["rec_texts"] if str(t).strip()])
+        elif isinstance(page, list):
+            for item in page:
+                if isinstance(item, list) and len(item) > 1 and isinstance(item[1], (tuple, list)):
+                    texts.append(str(item[1][0]))
+                elif isinstance(item, dict) and "rec_texts" in item:
+                    texts.extend([str(t) for t in item["rec_texts"] if str(t).strip()])
+    return " ".join(texts).strip()
+
+
 def get_paddleocr_engine():
     """โหลด PaddleOCR Thai Language Model แบบ Lazy Loading"""
     global PADDLE_OCR_ENGINE
@@ -28,13 +45,10 @@ def get_paddleocr_engine():
     if not PADDLE_OCR_AVAILABLE or PaddleOCR is None:
         return None
     try:
-        try:
-            PADDLE_OCR_ENGINE = PaddleOCR(use_angle_cls=False, lang='th')
-        except TypeError:
-            PADDLE_OCR_ENGINE = PaddleOCR(lang='th')
-        print("[ALPR OCR] ✅ PaddleOCR Thai Engine loaded successfully!")
+        PADDLE_OCR_ENGINE = PaddleOCR(lang='th')
+        logger.info("[ALPR OCR] PaddleOCR Thai Engine loaded successfully!")
     except Exception as ex:
-        print(f"[ALPR OCR] PaddleOCR init error: {ex}")
+        logger.error(f"[ALPR OCR] PaddleOCR init error: {ex}")
     return PADDLE_OCR_ENGINE
 
 
@@ -77,29 +91,28 @@ async def search_license_plate(image_path: str) -> dict | None:
                 logger.error(f"[ALPR OCR] iApp API search error: {e}")
 
         # ----------------------------------------------------
-        # Local Fast Pipeline: 2-Candidate Crop
+        # Local Fast Pipeline: Original Image + Preprocessed Crops
         # ----------------------------------------------------
         candidate_imgs = preprocess_license_plate_image(image)
+        # ตรวจสอบภาพต้นฉบับด้วย เพื่อความแม่นยำสูงสุดหากผู้ใช้ส่งภาพครอปป้ายทะเบียนมาโดยตรง
+        all_candidates = [image] + (candidate_imgs or [])
 
         plate_type_code, plate_type_label = "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
         if candidate_imgs and len(candidate_imgs) > 0:
             plate_type_code, plate_type_label = classify_license_plate_type(candidate_imgs[0])
 
-        # 1. High Speed Pass: PaddleOCR Engine (cls=False)
+        # 1. High Speed Pass: PaddleOCR Engine
         paddle_ocr = get_paddleocr_engine()
         if paddle_ocr is not None:
             def _paddle_pass(img_input):
                 try:
-                    res = paddle_ocr.ocr(img_input, cls=False)
-                    text_str = ""
-                    if res and res[0]:
-                        for line in res[0]:
-                            text_str += line[1][0] + " "
-                    return text_str.strip()
-                except Exception:
+                    res = paddle_ocr.ocr(img_input)
+                    return extract_paddle_text(res)
+                except Exception as err:
+                    logger.debug(f"[PaddleOCR] pass error: {err}")
                     return ""
 
-            for c_img in candidate_imgs:
+            for c_img in all_candidates:
                 paddle_text = await asyncio.to_thread(_paddle_pass, c_img)
                 if paddle_text:
                     clean_txt = "".join(ch for ch in paddle_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
@@ -110,14 +123,14 @@ async def search_license_plate(image_path: str) -> dict | None:
                             match["plate_type_label"] = plate_type_label
                             return match
 
-        # 2. Fast Fallback Pass: PyTesseract Engine
+        # 2. Fast Fallback Pass: PyTesseract Engine (หากมีการติดตั้ง)
         def _ocr_pass(img_input, psm_mode):
             try:
                 return pytesseract.image_to_string(img_input, lang="tha+eng", config=f"--psm {psm_mode}").strip()
             except Exception:
                 return ""
 
-        for c_img in candidate_imgs:
+        for c_img in all_candidates:
             for psm in [7, 6]:
                 raw_text = await asyncio.to_thread(_ocr_pass, c_img, psm)
                 if raw_text:

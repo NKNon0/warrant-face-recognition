@@ -24,7 +24,7 @@ def extract_id_number(text: str) -> str | None:
     if not text:
         return None
 
-    # ลวดลายแบบมีช่องว่างหรือขีดคั่น เช่น 1 2345 67890 12 3
+    # ลวดลายแบบมีช่องว่างหรือขีดคั่น เช่น 1 4509 02381 67 9 หรือ 1-4509-02381-67-9
     pattern_spaced = r'[0-9][\s\-–—]?[0-9]{4}[\s\-–—]?[0-9]{5}[\s\-–—]?[0-9]{2}[\s\-–—]?[0-9]'
     matches = re.findall(pattern_spaced, text)
     for m in matches:
@@ -38,6 +38,17 @@ def extract_id_number(text: str) -> str | None:
     if matches_direct:
         return matches_direct[0]
 
+    # ค้นหาตัวเลขทั้งหมดในข้อความหลังตัดอักขระพิเศษ
+    all_digits = re.sub(r'\D', '', text)
+    if len(all_digits) == 13:
+        return all_digits
+    elif len(all_digits) > 13:
+        for i in range(len(all_digits) - 12):
+            sub = all_digits[i:i+13]
+            if validate_thai_id_checksum(sub):
+                return sub
+        return all_digits[:13]
+
     return None
 
 
@@ -46,17 +57,16 @@ def extract_thai_name(ocr_text: str) -> str | None:
     if not ocr_text:
         return None
     try:
+        # ตรวจหาในข้อความทั้งหมดโดยใช้ลำดับคำนำหน้าที่ถูกต้อง (นางสาว ก่อน นาง)
+        name_pattern = r'(?:ชื่อตัวและชื่อสกุล\s*)?(?:นางสาว|เด็กหญิง|เด็กชาย|นาง|นาย)\s+([ก-๙]{2,})\s+([ก-๙]{2,})'
+        match = re.search(name_pattern, ocr_text)
+        if match:
+            first_name = match.group(1).strip()
+            last_name = match.group(2).strip()
+            return f"{first_name} {last_name}"
+
         lines = [line.strip() for line in ocr_text.split('\n') if line.strip()]
-
         for i, line in enumerate(lines):
-            # ตรวจหา Prefix เช่น นาย นาง นางสาว หรือ ชื่อตัวและชื่อสกุล
-            name_pattern = r'(?:นาย|นาง|นางสาว|ชื่อตัวและชื่อสกุล|ชื่อ|Name)\s*([ก-๙]{2,})\s+([ก-๙]{2,})'
-            match = re.search(name_pattern, line)
-            if match:
-                first_name = match.group(1).strip()
-                last_name = match.group(2).strip()
-                return f"{first_name} {last_name}"
-
             # กรณีข้อความอยู่บรรทัดถัดไป
             if any(k in line for k in ["ชื่อตัวและชื่อสกุล", "ชื่อตัว", "Name"]):
                 if i + 1 < len(lines):

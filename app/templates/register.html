@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ลงทะเบียนเข้าใช้งานระบบ C.I.A.S. | Criminal Identification Automated System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1e3a8a;
+            --primary-dark: #0f172a;
+            --accent: #3b82f6;
+            --accent-gold: #f59e0b;
+            --bg: #0b1329;
+            --card-bg: rgba(17, 24, 39, 0.85);
+            --border: rgba(255, 255, 255, 0.12);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --danger: #ef4444;
+            --success: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Kanit', sans-serif;
+        }
+
+        body {
+            background: radial-gradient(circle at top, #1e293b 0%, var(--bg) 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 540px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 36px 32px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7), 0 0 40px rgba(59, 130, 246, 0.15);
+            backdrop-filter: blur(16px);
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .badge-logo {
+            width: 72px;
+            height: 72px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--primary) 100%);
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 36px;
+            box-shadow: 0 0 25px rgba(59, 130, 246, 0.5);
+            margin-bottom: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #ffffff;
+            margin-bottom: 6px;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 14px;
+            font-weight: 300;
+            line-height: 1.5;
+        }
+
+        .notice-banner {
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-size: 13px;
+            color: #fde68a;
+            line-height: 1.4;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #cbd5e1;
+        }
+
+        .required {
+            color: var(--danger);
+        }
+
+        .input-wrap {
+            position: relative;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 13px 16px;
+            background: rgba(15, 23, 42, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 15px;
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        .form-control:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+            background: rgba(15, 23, 42, 0.9);
+        }
+
+        .form-control[readonly] {
+            background: rgba(30, 41, 59, 0.5);
+            color: #94a3b8;
+            cursor: not-allowed;
+            border-color: rgba(255, 255, 255, 0.08);
+        }
+
+        select.form-control {
+            cursor: pointer;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            background-size: 16px;
+        }
+
+        select.form-control option {
+            background: #0f172a;
+            color: #ffffff;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: 5px;
+        }
+
+        .btn-submit {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: 0 10px 20px -5px rgba(37, 99, 235, 0.5);
+            transition: all 0.2s ease;
+            margin-top: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-submit:hover {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 15px 25px -5px rgba(37, 99, 235, 0.6);
+        }
+
+        .btn-submit:active {
+            transform: translateY(0);
+        }
+
+        .footer {
+            margin-top: 24px;
+            text-align: center;
+            font-size: 12px;
+            color: #64748b;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <div class="badge-logo">🛡️</div>
+        <h1>ระบบลงทะเบียนยืนยันตัวตนเจ้าหน้าที่</h1>
+        <p>C.I.A.S. (Criminal Identification Automated System)<br>เชื่อมต่อระบบการตรวจสอบกับ Telegram Bot <b>@Nontdanu_bot</b></p>
+    </div>
+
+    <div class="notice-banner">
+        <span>⚠️</span>
+        <div><b>ข้อกำหนดความปลอดภัย:</b> ระบบนี้จำกัดการเข้าถึงเฉพาะเจ้าหน้าที่ตำรวจและผู้ได้รับอนุญาตเท่านั้น ข้อมูลที่ลงทะเบียนจะต้องได้รับการอนุมัติจากผู้ดูแลระบบก่อนจึงจะเริ่มใช้งานได้</div>
+    </div>
+
+    <form method="POST" action="/register">
+        <input type="hidden" name="telegram_id" value="{{ telegram_id }}">
+        <input type="hidden" name="username" value="{{ username }}">
+
+        <div class="form-group">
+            <label>รหัสประจำตัว Telegram ID</label>
+            <input type="text" class="form-control" value="{{ telegram_id }}" readonly>
+            <div class="hint">รหัสอ้างอิงบัญชี Telegram ของท่าน (เชื่อมโยงอัตโนมัติ)</div>
+        </div>
+
+        <div class="form-group">
+            <label for="rank_title">ยศ / คำนำหน้า <span class="required">*</span></label>
+            <select id="rank_title" name="rank_title" class="form-control" required>
+                <option value="" disabled selected>-- เลือกยศของท่าน --</option>
+                <optgroup label="ชั้นสัญญาบัตร">
+                    <option value="พล.ต.อ.">พล.ต.อ. (พลตำรวจเอก)</option>
+                    <option value="พล.ต.ท.">พล.ต.ท. (พลตำรวจโท)</option>
+                    <option value="พล.ต.ต.">พล.ต.ต. (พลตำรวจตรี)</option>
+                    <option value="พ.ต.อ.">พ.ต.อ. (พันตำรวจเอก)</option>
+                    <option value="พ.ต.ท.">พ.ต.ท. (พันตำรวจโท)</option>
+                    <option value="พ.ต.ต.">พ.ต.ต. (พันตำรวจตรี)</option>
+                    <option value="ร.ต.อ.">ร.ต.อ. (ร้อยตำรวจเอก)</option>
+                    <option value="ร.ต.ท.">ร.ต.ท. (ร้อยตำรวจโท)</option>
+                    <option value="ร.ต.ต.">ร.ต.ต. (ร้อยตำรวจตรี)</option>
+                </optgroup>
+                <optgroup label="ชั้นประทวน">
+                    <option value="ด.ต.">ด.ต. (ดาบตำรวจ)</option>
+                    <option value="จ.ส.ต.">จ.ส.ต. (จ่าสิบตำรวจ)</option>
+                    <option value="ส.ต.อ.">ส.ต.อ. (สิบตำรวจเอก)</option>
+                    <option value="ส.ต.ท.">ส.ต.ท. (สิบตำรวจโท)</option>
+                    <option value="ส.ต.ต.">ส.ต.ต. (สิบตำรวจตรี)</option>
+                </optgroup>
+                <optgroup label="บุคคลภายนอก / หน่วยงานอื่น">
+                    <option value="นาย">นาย</option>
+                    <option value="นาง">นาง</option>
+                    <option value="น.ส.">น.ส. (นางสาว)</option>
+                    <option value="อื่นๆ">อื่นๆ (เจ้าหน้าที่ส่วนงานพิเศษ)</option>
+                </optgroup>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="first_name">ชื่อ - นามสกุลจริง <span class="required">*</span></label>
+            <input type="text" id="first_name" name="first_name" class="form-control" placeholder="เช่น สมชาย ใจมั่นคง" value="{{ default_name }}" required>
+        </div>
+
+        <div class="form-group">
+            <label for="police_station">ตำแหน่ง / สังกัด / สถานีตำรวจ <span class="required">*</span></label>
+            <input type="text" id="police_station" name="police_station" class="form-control" placeholder="เช่น รอง สว.สส. สภ.เมือง หรือ กก.สส.บก.น.1" required>
+            <div class="hint">ระบุตำแหน่งงานและหน่วยงานสังกัดของท่าน</div>
+        </div>
+
+        <div class="form-group">
+            <label for="phone_number">เบอร์โทรศัพท์ติดต่อ <span class="required">*</span></label>
+            <input type="tel" id="phone_number" name="phone_number" class="form-control" placeholder="เช่น 0812345678" pattern="[0-9]{9,10}" maxlength="10" required>
+            <div class="hint">ระบุเบอร์โทร 10 หลัก เพื่อการติดต่อยืนยันตัวตน</div>
+        </div>
+
+        <button type="submit" class="btn-submit">
+            <span>📝</span> ส่งข้อมูลลงทะเบียนเข้าใช้งาน
+        </button>
+    </form>
+
+    <div class="footer">
+        ระบบตรวจสอบประวัติอาชญากรรมและหมายจับอัตโนมัติ (C.I.A.S.)<br>
+        ความปลอดภัยและการเข้าถึงข้อมูลตามมาตรฐาน พ.ร.บ. คุ้มครองข้อมูลส่วนบุคคล (PDPA)
+    </div>
+</div>
+
+</body>
+</html>

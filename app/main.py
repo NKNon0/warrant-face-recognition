@@ -1,3 +1,8 @@
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+
 import asyncio
 import aiohttp
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -5,11 +10,13 @@ from app.config import TELEGRAM_TOKEN, TELEGRAM_API
 from app.bot import handle_telegram_update, remove_telegram_menu_button
 from app.db import init_db
 from app.api import router as api_router
+from app.api.web_routes import router as web_router
 from app.modules.face import get_insightface_app
 from app.modules.license_plate import get_yolo_plate_model, get_paddleocr_engine
 
 app = FastAPI(title="Warrant AI Recognition Direct Bot Service")
 app.include_router(api_router)
+app.include_router(web_router)
 
 
 @app.get("/", include_in_schema=False)

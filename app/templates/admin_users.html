@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบจัดการและอนุมัติผู้ใช้งาน | C.I.A.S. Admin Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b1329;
+            --card-bg: rgba(17, 24, 39, 0.9);
+            --border: rgba(255, 255, 255, 0.12);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Kanit', sans-serif;
+        }
+
+        body {
+            background: #090e1f;
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 30px 24px;
+        }
+
+        .header-bar {
+            max-width: 1200px;
+            margin: 0 auto 28px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 20px;
+        }
+
+        .title-wrap {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo-icon {
+            width: 52px;
+            height: 52px;
+            background: linear-gradient(135deg, #1e40af 0%, #1d4ed8 100%);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 26px;
+            box-shadow: 0 0 20px rgba(37, 99, 235, 0.4);
+        }
+
+        .title-wrap h1 {
+            font-size: 22px;
+            font-weight: 700;
+        }
+
+        .title-wrap p {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .stats-grid {
+            max-width: 1200px;
+            margin: 0 auto 24px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 16px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .stat-card .num {
+            font-size: 28px;
+            font-weight: 700;
+        }
+
+        .stat-card .label {
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .main-card {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .card-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+            text-align: left;
+        }
+
+        th {
+            background: rgba(30, 41, 59, 0.6);
+            padding: 12px 14px;
+            color: #cbd5e1;
+            font-weight: 500;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            vertical-align: middle;
+        }
+
+        tr:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-pending {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.4);
+        }
+
+        .badge-approved {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
+            border: 1px solid rgba(16, 185, 129, 0.4);
+        }
+
+        .badge-rejected {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            border: 1px solid rgba(239, 68, 68, 0.4);
+        }
+
+        .badge-admin {
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+        }
+
+        .btn-action {
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            margin-right: 6px;
+        }
+
+        .btn-approve {
+            background: #059669;
+            color: #ffffff;
+        }
+
+        .btn-approve:hover {
+            background: #10b981;
+            transform: translateY(-1px);
+        }
+
+        .btn-reject {
+            background: #dc2626;
+            color: #ffffff;
+        }
+
+        .btn-reject:hover {
+            background: #ef4444;
+            transform: translateY(-1px);
+        }
+
+        .btn-refresh {
+            background: rgba(255, 255, 255, 0.1);
+            color: #ffffff;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-refresh:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+    </style>
+</head>
+<body>
+
+<div class="header-bar">
+    <div class="title-wrap">
+        <div class="logo-icon">👮‍♂️</div>
+        <div>
+            <h1>ระบบจัดการและอนุมัติผู้ใช้งาน (C.I.A.S. Admin)</h1>
+            <p>ควบคุมสิทธิ์การเข้าถึงข้อมูลหมายจับและการรู้จำด้วย AI ประจำ Telegram Bot <b>@Nontdanu_bot</b></p>
+        </div>
+    </div>
+    <div>
+        <a href="/admin/users" class="btn-refresh">🔄 รีเฟรชข้อมูล</a>
+    </div>
+</div>
+
+{% if action_msg == 'approved' %}
+<div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); color: #34d399; padding: 14px 20px; border-radius: 12px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 20px;">🎉</span>
+        <span>อนุมัติสิทธิ์การเข้าใช้งานให้แก่ <strong>{{ action_name }}</strong> เรียบร้อยแล้ว พร้อมส่งการแจ้งเตือนเริ่มใช้งานให้เจ้าหน้าที่ใน Telegram แล้วครับ!</span>
+    </div>
+    <a href="/admin/users" style="color: #cbd5e1; text-decoration: none; font-size: 20px; margin-left: 15px;">&times;</a>
+</div>
+{% elif action_msg == 'rejected' %}
+<div style="background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.4); color: #f87171; padding: 14px 20px; border-radius: 12px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between;">
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-size: 20px;">🔒</span>
+        <span>ระงับสิทธิ์การใช้งานของ <strong>{{ action_name }}</strong> เรียบร้อยแล้ว พร้อมส่งการแจ้งเตือนหาเจ้าหน้าที่แล้ว</span>
+    </div>
+    <a href="/admin/users" style="color: #cbd5e1; text-decoration: none; font-size: 20px; margin-left: 15px;">&times;</a>
+</div>
+{% endif %}
+
+<div class="stats-grid">
+    <div class="stat-card">
+        <div>
+            <div class="label">ผู้ใช้งานทั้งหมด</div>
+            <div class="num" style="color: #60a5fa;">{{ total_count }}</div>
+        </div>
+        <div style="font-size: 32px;">👥</div>
+    </div>
+    <div class="stat-card">
+        <div>
+            <div class="label">รอการอนุมัติ (Pending)</div>
+            <div class="num" style="color: #fbbf24;">{{ pending_count }}</div>
+        </div>
+        <div style="font-size: 32px;">⏳</div>
+    </div>
+    <div class="stat-card">
+        <div>
+            <div class="label">ได้รับอนุมัติแล้ว (Active)</div>
+            <div class="num" style="color: #34d399;">{{ approved_count }}</div>
+        </div>
+        <div style="font-size: 32px;">✅</div>
+    </div>
+</div>
+
+<div class="main-card">
+    <div class="card-header">
+        <h2>รายชื่อผู้ใช้งานและเจ้าหน้าที่ที่ลงทะเบียนในระบบ</h2>
+    </div>
+
+    <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>ลำดับ</th>
+                    <th>ยศ - ชื่อ นามสกุล</th>
+                    <th>ตำแหน่ง / สังกัด</th>
+                    <th>เบอร์โทรศัพท์</th>
+                    <th>Telegram ID</th>
+                    <th>บทบาท</th>
+                    <th>สถานะสิทธิ์</th>
+                    <th>การจัดการสิทธิ์</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><b>{{ u.rank_title or '-' }} {{ u.first_name or u.username or 'ไม่ระบุชื่อ' }}</b></td>
+                    <td>{{ u.police_station or '-' }}</td>
+                    <td>{{ u.phone_number or '-' }}</td>
+                    <td><code>{{ u.telegram_id }}</code> {% if u.username %}(@{{ u.username }}){% endif %}</td>
+                    <td>
+                        {% if u.role == 'admin' %}
+                            <span class="badge badge-admin">👑 Admin</span>
+                        {% else %}
+                            <span class="badge" style="background: rgba(148, 163, 184, 0.15); color: #cbd5e1;">👮‍♂️ Police</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.role == 'admin' %}
+                            <span class="badge badge-approved">อนุมัติอัตโนมัติ</span>
+                        {% elif u.is_authorized == 1 %}
+                            <span class="badge badge-approved">✅ ได้รับอนุมัติ</span>
+                        {% else %}
+                            <span class="badge badge-pending">⏳ รอการอนุมัติ</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.role != 'admin' %}
+                            {% if u.is_authorized == 1 %}
+                                <form method="POST" action="/admin/users/{{ u.telegram_id }}/reject" style="display: inline;">
+                                    <button type="submit" class="btn-action btn-reject" onclick="return confirm('ยืนยันการระงับสิทธิ์ผู้ใช้นี้?')">❌ ระงับสิทธิ์</button>
+                                </form>
+                            {% else %}
+                                <form method="POST" action="/admin/users/{{ u.telegram_id }}/approve" style="display: inline;">
+                                    <button type="submit" class="btn-action btn-approve">✅ อนุมัติสิทธิ์</button>
+                                </form>
+                                <form method="POST" action="/admin/users/{{ u.telegram_id }}/reject" style="display: inline;">
+                                    <button type="submit" class="btn-action btn-reject" onclick="return confirm('ยืนยันปฏิเสธคำขอนี้?')">❌ ปฏิเสธ</button>
+                                </form>
+                            {% endif %}
+                        {% else %}
+                            <span style="font-size: 12px; color: var(--text-muted);">ผู้ดูแลระบบหลัก</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 30px;">
+                        ยังไม่มีข้อมูลผู้ใช้งานที่ลงทะเบียนในระบบ
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+</body>
+</html>

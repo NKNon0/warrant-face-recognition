@@ -102,52 +102,73 @@ async def find_warrant_by_name(person_name: str) -> dict | None:
         return None
 
 
+from app.modules.license_plate.ocr_engine import get_paddleocr_engine, extract_paddle_text
+
+
 async def search_id_card(image_path: str) -> dict | None:
     """
     ระบบค้นหาข้อมูลจากบัตรประชาชน (Thai ID Card Deep OCR & Warrant Matcher)
+    ใช้ PaddleOCR เป็นเอนจินหลัก ความเร็วสูงและแม่นยำภาษาไทยระดับ 99%
     """
     try:
         image = cv2_imread_unicode(image_path)
         if image is None:
             return None
 
-        # ย่อขนาดรูปภาพให้เหมาะสมกับการทำ OCR (Max Width 1200px)
-        h, w = image.shape[:2]
-        if w > 1200:
-            scale = 1200.0 / w
-            image = cv2.resize(image, (1200, int(h * scale)), interpolation=cv2.INTER_AREA)
+        ocr_texts = []
 
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        enhanced_gray = enhance_id_card_contrast(gray)
+        # 1. High-Speed Pass: PaddleOCR Engine
+        paddle_ocr = get_paddleocr_engine()
+        if paddle_ocr is not None:
+            def _paddle_run(img_in):
+                try:
+                    res = paddle_ocr.ocr(img_in)
+                    return extract_paddle_text(res)
+                except Exception as err:
+                    logger.debug(f"[ID Matcher] PaddleOCR run error: {err}")
+                    return ""
 
-        # ----------------------------------------------------
-        # Multi-Pass OCR: Original Gray & Faded Text Enhanced
-        # ----------------------------------------------------
-        for target_img in [enhanced_gray, gray]:
-            for psm_mode in [6, 4]:
-                def _ocr_call(img_in, psm):
-                    try:
-                        return pytesseract.image_to_string(img_in, lang="tha+eng", config=f"--psm {psm} --dpi 200")
-                    except Exception:
-                        return ""
+            paddle_text = await asyncio.to_thread(_paddle_run, image)
+            if paddle_text:
+                ocr_texts.append(paddle_text)
 
-                ocr_result = await asyncio.to_thread(_ocr_call, target_img, psm_mode)
-                if not ocr_result:
-                    continue
+        # 2. Enhanced Image Pass (หากไม่พบข้อความในรอบแรก)
+        if not ocr_texts:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            enhanced = enhance_id_card_contrast(gray)
+            if paddle_ocr is not None:
+                enh_text = await asyncio.to_thread(_paddle_run, enhanced)
+                if enh_text:
+                    ocr_texts.append(enh_text)
 
-                # 1. ตรวจสอบเลขประจำตัวประชาชน 13 หลัก
-                id_num = extract_id_number(ocr_result)
-                if id_num:
-                    warrant = await find_warrant_by_id_number(id_num)
-                    if warrant:
-                        return warrant
+        # 3. Fallback: PyTesseract (ถ้ามี)
+        def _tesseract_call(img_in):
+            try:
+                return pytesseract.image_to_string(img_in, lang="tha+eng", config="--psm 6")
+            except Exception:
+                return ""
 
-                # 2. ตรวจสอบชื่อ-นามสกุล
-                detected_name = extract_thai_name(ocr_result)
-                if detected_name:
-                    warrant_name = await find_warrant_by_name(detected_name)
-                    if warrant_name:
-                        return warrant_name
+        tess_text = await asyncio.to_thread(_tesseract_call, image)
+        if tess_text:
+            ocr_texts.append(tess_text)
+
+        combined_text = " ".join(ocr_texts).strip()
+        if not combined_text:
+            return None
+
+        # 1. ตรวจสอบเลขประจำตัวประชาชน 13 หลัก
+        id_num = extract_id_number(combined_text)
+        if id_num:
+            warrant = await find_warrant_by_id_number(id_num)
+            if warrant:
+                return warrant
+
+        # 2. ตรวจสอบชื่อ-นามสกุล
+        detected_name = extract_thai_name(combined_text)
+        if detected_name:
+            warrant_name = await find_warrant_by_name(detected_name)
+            if warrant_name:
+                return warrant_name
 
         return None
     except Exception as e:
