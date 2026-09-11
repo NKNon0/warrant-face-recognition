@@ -1,8 +1,13 @@
+import os
+
+
 def format_face_result(result: dict, detected_at: str) -> str:
     """สร้างข้อความผลลัพธ์การตรวจพบใบหน้าบุคคลตามหมายจับ"""
     score = result.get("score", 0.0)
+    warrant_path = result.get("warrant_url")
+    warrant_status = " (พร้อมแนบภาพหมายศาลคู่)" if warrant_path and os.path.exists(warrant_path) else ""
     text = (
-        f"🚨 <b>ผลการตรวจพบใบหน้าบุคคลเป้าหมาย!</b>\n"
+        f"🚨 <b>ผลการตรวจพบใบหน้าบุคคลเป้าหมาย!</b>{warrant_status}\n"
         f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 👤 ใบหน้าบุคคล\n"
         f"👤 <b>ชื่อ-สกุล:</b> {result.get('person_name', '-')}\n"
         f"🪪 <b>เลขบัตรประชาชน:</b> {result.get('id_number', '-')}\n"

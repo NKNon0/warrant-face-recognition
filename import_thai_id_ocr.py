@@ -53,9 +53,9 @@ def parse_id_ocr_file(file_path: str) -> dict | None:
         return None
 
 async def import_all_thai_id_ocr():
-    folder = "c:/Users/n/OneDrive/Desktop/datatest/Thai ID OCR"
-    if not os.path.exists(folder):
-        folder = "datatest/Thai ID OCR"
+    # กำหนดฐานข้อมูลให้อยู่ใน datatest ในโปรเจคเท่านั้นตามคำสั่ง
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    folder = os.path.join(project_root, "datatest", "Thai ID OCR")
 
     if not os.path.exists(folder):
         print(f"⚠️ ไม่พบโฟลเดอร์ {folder}")

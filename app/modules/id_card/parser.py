@@ -41,13 +41,13 @@ def extract_id_number(text: str) -> str | None:
     # ค้นหาตัวเลขทั้งหมดในข้อความหลังตัดอักขระพิเศษ
     all_digits = re.sub(r'\D', '', text)
     if len(all_digits) == 13:
-        return all_digits
+        if validate_thai_id_checksum(all_digits):
+            return all_digits
     elif len(all_digits) > 13:
         for i in range(len(all_digits) - 12):
             sub = all_digits[i:i+13]
             if validate_thai_id_checksum(sub):
                 return sub
-        return all_digits[:13]
 
     return None
 

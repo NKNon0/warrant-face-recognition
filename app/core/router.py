@@ -103,17 +103,22 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
                 if target_type == "face":
                     face_result = await search_face(image_path)
                     if face_result and face_result.get("type") != "no_face":
-                        face_result["detected_type"] = "face"
-                        face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
-                        results.append(face_result)
-                        await save_search_result(
-                            request_id=request_id,
-                            result_type="face",
-                            match_score=face_result.get("score", 0.0),
-                            matched_record_id=face_result.get("id"),
-                            details=face_result,
-                        )
-                        break
+                        if face_result.get("found"):
+                            face_result["detected_type"] = "face"
+                            face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
+                            results.append(face_result)
+                            await save_search_result(
+                                request_id=request_id,
+                                result_type="face",
+                                match_score=face_result.get("score", 0.0),
+                                matched_record_id=face_result.get("id"),
+                                details=face_result,
+                            )
+                            break
+                        elif face_result.get("detected_face"):
+                            # ตรวจพบใบหน้าชัดเจนแต่ไม่พบหมายจับในฐานข้อมูล ยุติ pipeline ทันที
+                            # ป้องกันการ fall-through ไปทำ OCR ป้ายทะเบียนหรือบัตรประชาชนให้เสียเวลา
+                            break
 
                 elif target_type == "plate":
                     plate_result = await search_license_plate(image_path)
@@ -149,7 +154,7 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
 
         elif mode == "face":
             face_result = await search_face(image_path)
-            if face_result and face_result.get("type") != "no_face":
+            if face_result and face_result.get("found"):
                 face_result["detected_type"] = "face"
                 face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
                 results.append(face_result)

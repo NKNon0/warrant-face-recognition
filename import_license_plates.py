@@ -88,9 +88,9 @@ async def run_import():
     
     await init_license_plates_table()
     
-    folder_path = "datatest/Plate OCR"
-    if not os.path.exists(folder_path):
-        folder_path = "C:\\Users\\n\\OneDrive\\Desktop\\datatest\\Plate OCR"
+    # กำหนดฐานข้อมูลให้อยู่ใน datatest ในโปรเจคเท่านั้นตามคำสั่ง
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    folder_path = os.path.join(project_root, "datatest", "Plate OCR")
         
     txt_files = glob.glob(os.path.join(folder_path, "*.txt"))
     print(f"[INFO] Found {len(txt_files)} text files in {folder_path}:\n")

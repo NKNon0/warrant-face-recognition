@@ -111,6 +111,61 @@ async def send_photo(chat_id: int, photo_path: str, caption: str):
         await send_message(chat_id, caption)
 
 
+async def send_media_group(chat_id: int, photo_paths: list[str], caption: str = ""):
+    """ส่งรูปภาพเป็นอัลบั้มคู่ (sendMediaGroup) เช่น รูปใบหน้าตรงในฐานข้อมูลคู่กับหมายศาล"""
+    opened_files = []
+    try:
+        url = f"{TELEGRAM_API}/sendMediaGroup"
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+
+        media_items = []
+        for idx, p in enumerate(photo_paths):
+            attach_key = f"photo_{idx}"
+            media_obj = {
+                "type": "photo",
+                "media": f"attach://{attach_key}"
+            }
+            if idx == 0 and caption:
+                media_obj["caption"] = caption
+                media_obj["parse_mode"] = "HTML"
+            media_items.append(media_obj)
+            f = open(p, "rb")
+            opened_files.append(f)
+            ext = os.path.splitext(p)[1].lower()
+            mime = "image/png" if ext == ".png" else "image/jpeg"
+            form.add_field(attach_key, f, filename=os.path.basename(p), content_type=mime)
+
+        form.add_field("media", json.dumps(media_items))
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=form) as resp:
+                res_data = await resp.json()
+                if res_data.get("ok"):
+                    return res_data
+                logger.warning(f"sendMediaGroup returned not ok: {res_data}")
+
+        # Fallback หาก Telegram API ตอบกลับ not ok ให้ส่งแบบเดี่ยวเรียงกัน
+        logger.info("[Telegram] Falling back to sequential send_photo...")
+        await send_photo(chat_id, photo_paths[0], caption)
+        if len(photo_paths) > 1:
+            await send_photo(chat_id, photo_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับ)</b>")
+    except Exception as e:
+        logger.error(f"send_media_group error: {e}")
+        if photo_paths:
+            await send_photo(chat_id, photo_paths[0], caption)
+            if len(photo_paths) > 1:
+                await send_photo(chat_id, photo_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับ)</b>")
+        else:
+            await send_message(chat_id, caption)
+    finally:
+        for f in opened_files:
+            try:
+                f.close()
+            except Exception:
+                pass
+
+
 async def get_user(telegram_id: int) -> dict | None:
     """ดึงข้อมูลผู้ใช้จากฐานข้อมูลตาม telegram_id"""
     try:
@@ -513,8 +568,19 @@ async def handle_telegram_update(update: dict):
         if item_type == "face":
             caption = format_face_result(item, detected_at)
             photo_file = item.get("photo_url")
+            warrant_file = item.get("warrant_url")
+
+            photos_to_send = []
             if photo_file and os.path.exists(photo_file):
-                await send_photo(chat_id, photo_file, caption)
+                photos_to_send.append(photo_file)
+            if warrant_file and os.path.exists(warrant_file):
+                photos_to_send.append(warrant_file)
+
+            if len(photos_to_send) >= 2:
+                # ส่งรูปคู่: ใบหน้าตรงในฐานข้อมูล + หมายศาล
+                await send_media_group(chat_id, photos_to_send, caption)
+            elif len(photos_to_send) == 1:
+                await send_photo(chat_id, photos_to_send[0], caption)
             else:
                 await send_message(chat_id, caption)
 
