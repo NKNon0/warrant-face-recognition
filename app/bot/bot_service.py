@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -25,26 +26,44 @@ def get_local_ip() -> str:
         return "127.0.0.1"
 
 
+_telegram_session: aiohttp.ClientSession | None = None
+
+
+async def get_telegram_session() -> aiohttp.ClientSession:
+    """คืนค่า ClientSession แบบ Connection Pooling พร้อม Keep-Alive เพื่อความรวดเร็วสูงสุด (< 200ms)"""
+    global _telegram_session
+    if _telegram_session is None or _telegram_session.closed:
+        connector = aiohttp.TCPConnector(family=socket.AF_INET, limit=30, keepalive_timeout=60, enable_cleanup_closed=True)
+        timeout = aiohttp.ClientTimeout(total=60, connect=25)
+        _telegram_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    return _telegram_session
+
+
 async def fetch_file_path(file_id: str) -> str:
     """ดึง URL เส้นทางไฟล์จาก Telegram API"""
-    async with aiohttp.ClientSession() as session:
-        url = f"{TELEGRAM_API}/getFile?file_id={file_id}"
-        async with session.get(url) as resp:
-            data = await resp.json()
-            return data["result"]["file_path"]
+    session = await get_telegram_session()
+    url = f"{TELEGRAM_API}/getFile?file_id={file_id}"
+    async with session.get(url) as resp:
+        data = await resp.json()
+        if not data.get("ok"):
+            raise RuntimeError(f"Telegram getFile error: {data}")
+        return data["result"]["file_path"]
 
 
 async def download_file(file_path: str) -> bytes:
     """ดาวน์โหลดรูปภาพจาก Telegram Server"""
-    async with aiohttp.ClientSession() as session:
-        url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
-        async with session.get(url) as resp:
-            return await resp.read()
+    session = await get_telegram_session()
+    url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+    async with session.get(url) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"Download file failed: HTTP {resp.status}")
+        return await resp.read()
 
 
 async def send_message(chat_id: int, text: str, reply_markup: dict = None):
     """ส่งข้อความ HTML ไปยัง Telegram Chat"""
-    async with aiohttp.ClientSession() as session:
+    try:
+        session = await get_telegram_session()
         url = f"{TELEGRAM_API}/sendMessage"
         payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
         if reply_markup:
@@ -54,19 +73,22 @@ async def send_message(chat_id: int, text: str, reply_markup: dict = None):
             if not data.get("ok"):
                 logger.error(f"sendMessage Error (chat_id: {chat_id}): {data}")
             return data
+    except Exception as e:
+        logger.error(f"send_message error: {e}")
+        return {"ok": False, "error": str(e)}
 
 
 async def answer_callback_query(callback_query_id: str, text: str, show_alert: bool = False):
     """ตอบรับ Callback Query จาก Inline Buttons พร้อมแจ้งเตือนแบบ Modal Alert"""
     try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{TELEGRAM_API}/answerCallbackQuery"
-            payload = {
-                "callback_query_id": callback_query_id,
-                "text": text,
-                "show_alert": show_alert,
-            }
-            await session.post(url, json=payload)
+        session = await get_telegram_session()
+        url = f"{TELEGRAM_API}/answerCallbackQuery"
+        payload = {
+            "callback_query_id": callback_query_id,
+            "text": text,
+            "show_alert": show_alert,
+        }
+        await session.post(url, json=payload)
     except Exception as e:
         logger.error(f"answer_callback_query error: {e}")
 
@@ -74,53 +96,139 @@ async def answer_callback_query(callback_query_id: str, text: str, show_alert: b
 async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: dict = None):
     """แก้ไขข้อความเดิมใน Telegram Chat พร้อมดักจับข้อผิดพลาด"""
     try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{TELEGRAM_API}/editMessageText"
-            payload = {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "text": text,
-                "parse_mode": "HTML",
-            }
-            if reply_markup is not None:
-                payload["reply_markup"] = reply_markup
-            async with session.post(url, json=payload) as resp:
-                data = await resp.json()
-                if not data.get("ok"):
-                    logger.error(f"editMessageText Error: {data}")
-                return data
+        session = await get_telegram_session()
+        url = f"{TELEGRAM_API}/editMessageText"
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        async with session.post(url, json=payload) as resp:
+            data = await resp.json()
+            if not data.get("ok"):
+                logger.error(f"editMessageText Error: {data}")
+            return data
     except Exception as e:
         logger.error(f"edit_message_text error: {e}")
 
 
 async def send_photo(chat_id: int, photo_path: str, caption: str):
-    """ส่งรูปภาพพร้อม Caption ไปยัง Telegram"""
+    """ส่งรูปภาพพร้อม Caption ไปยัง Telegram (รองรับ Cross-Platform Windows & Linux Docker)"""
     try:
-        async with aiohttp.ClientSession() as session:
-            url = f"{TELEGRAM_API}/sendPhoto"
-            with open(photo_path, "rb") as f:
-                form = aiohttp.FormData()
-                form.add_field("chat_id", str(chat_id))
-                form.add_field("caption", caption)
-                form.add_field("parse_mode", "HTML")
-                form.add_field("photo", f, filename=os.path.basename(photo_path), content_type="image/jpeg")
-                async with session.post(url, data=form) as resp:
-                    return await resp.json()
+        from app.modules.face.matcher import normalize_path
+        actual_path = normalize_path(photo_path) or photo_path
+        if not os.path.exists(actual_path) or not os.path.isfile(actual_path):
+            logger.error(f"[Telegram] send_photo file not found: {photo_path} (resolved: {actual_path})")
+            await send_message(chat_id, caption)
+            return {"ok": False, "error": "file_not_found"}
+
+        with open(actual_path, "rb") as f:
+            photo_bytes = f.read()
+
+        ext = os.path.splitext(actual_path)[1].lower()
+        mime = "image/png" if ext == ".png" else "image/jpeg"
+
+        form = aiohttp.FormData()
+        form.add_field("chat_id", str(chat_id))
+        form.add_field("caption", caption)
+        form.add_field("parse_mode", "HTML")
+        form.add_field("photo", photo_bytes, filename=f"photo{ext}", content_type=mime)
+
+        session = await get_telegram_session()
+        url = f"{TELEGRAM_API}/sendPhoto"
+        async with session.post(url, data=form) as resp:
+            res_data = await resp.json()
+            if not res_data.get("ok"):
+                logger.error(f"[Telegram] send_photo returned not ok: {res_data}")
+                await send_message(chat_id, caption)
+            return res_data
     except Exception as e:
         logger.error(f"send_photo error: {e}")
         await send_message(chat_id, caption)
+        return {"ok": False, "error": str(e)}
+
+
+async def delete_message(chat_id: int, message_id: int) -> bool:
+    """ลบข้อความ เช่น ข้อความแจ้งเตือนสถานะชั่วคราว"""
+    try:
+        url = f"{TELEGRAM_API}/deleteMessage"
+        payload = {"chat_id": chat_id, "message_id": message_id}
+        session = await get_telegram_session()
+        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            data = await resp.json()
+            return data.get("ok", False)
+    except Exception as e:
+        logger.debug(f"delete_message note: {e}")
+        return False
+
+
+def create_composite_warrant_image(photo_path: str, warrant_path: str) -> str | None:
+    """รวมภาพถ่ายหน้าตรงผู้ต้องหากับภาพเอกสารหมายจับจริงจากศาลเป็นภาพเดียว (Side-by-Side Composite)"""
+    try:
+        from PIL import Image
+        import tempfile
+
+        if not os.path.exists(photo_path) or not os.path.exists(warrant_path):
+            return None
+
+        im1 = Image.open(photo_path).convert("RGB")
+        im2 = Image.open(warrant_path).convert("RGB")
+
+        target_h = max(im1.height, im2.height, 1000)
+        target_h = min(target_h, 1400)
+
+        w1 = int(im1.width * (target_h / im1.height))
+        im1_resized = im1.resize((w1, target_h), Image.Resampling.LANCZOS)
+
+        w2 = int(im2.width * (target_h / im2.height))
+        im2_resized = im2.resize((w2, target_h), Image.Resampling.LANCZOS)
+
+        divider_w = 10
+        total_w = w1 + divider_w + w2
+
+        composite = Image.new("RGB", (total_w, target_h), (25, 30, 40))
+        composite.paste(im1_resized, (0, 0))
+        composite.paste(im2_resized, (w1 + divider_w, 0))
+
+        os.makedirs("data/temp", exist_ok=True)
+        temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", dir="data/temp", delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+
+        composite.save(temp_path, "JPEG", quality=90)
+        return temp_path
+    except Exception as e:
+        logger.error(f"create_composite_warrant_image error: {e}")
+        return None
 
 
 async def send_media_group(chat_id: int, photo_paths: list[str], caption: str = ""):
     """ส่งรูปภาพเป็นอัลบั้มคู่ (sendMediaGroup) เช่น รูปใบหน้าตรงในฐานข้อมูลคู่กับหมายศาล"""
-    opened_files = []
     try:
+        from app.modules.face.matcher import normalize_path
+        valid_paths = []
+        for p in photo_paths:
+            norm_p = normalize_path(p) or p
+            if os.path.exists(norm_p) and os.path.isfile(norm_p):
+                valid_paths.append(norm_p)
+
+        if not valid_paths:
+            logger.warning("[Telegram] send_media_group: No valid files found")
+            await send_message(chat_id, caption)
+            return {"ok": False}
+
+        if len(valid_paths) == 1:
+            return await send_photo(chat_id, valid_paths[0], caption)
+
         url = f"{TELEGRAM_API}/sendMediaGroup"
         form = aiohttp.FormData()
         form.add_field("chat_id", str(chat_id))
 
         media_items = []
-        for idx, p in enumerate(photo_paths):
+        for idx, p in enumerate(valid_paths):
             attach_key = f"photo_{idx}"
             media_obj = {
                 "type": "photo",
@@ -130,40 +238,34 @@ async def send_media_group(chat_id: int, photo_paths: list[str], caption: str = 
                 media_obj["caption"] = caption
                 media_obj["parse_mode"] = "HTML"
             media_items.append(media_obj)
-            f = open(p, "rb")
-            opened_files.append(f)
+            with open(p, "rb") as f:
+                p_bytes = f.read()
             ext = os.path.splitext(p)[1].lower()
             mime = "image/png" if ext == ".png" else "image/jpeg"
-            form.add_field(attach_key, f, filename=os.path.basename(p), content_type=mime)
+            form.add_field(attach_key, p_bytes, filename=f"photo_{idx}{ext}", content_type=mime)
 
         form.add_field("media", json.dumps(media_items))
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form) as resp:
-                res_data = await resp.json()
-                if res_data.get("ok"):
-                    return res_data
-                logger.warning(f"sendMediaGroup returned not ok: {res_data}")
+        session = await get_telegram_session()
+        async with session.post(url, data=form) as resp:
+            res_data = await resp.json()
+            if res_data.get("ok"):
+                return res_data
+            logger.warning(f"sendMediaGroup returned not ok: {res_data}")
 
         # Fallback หาก Telegram API ตอบกลับ not ok ให้ส่งแบบเดี่ยวเรียงกัน
         logger.info("[Telegram] Falling back to sequential send_photo...")
-        await send_photo(chat_id, photo_paths[0], caption)
-        if len(photo_paths) > 1:
-            await send_photo(chat_id, photo_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับ)</b>")
+        await send_photo(chat_id, valid_paths[0], caption)
+        if len(valid_paths) > 1:
+            await send_photo(chat_id, valid_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับจริง)</b>")
     except Exception as e:
         logger.error(f"send_media_group error: {e}")
         if photo_paths:
             await send_photo(chat_id, photo_paths[0], caption)
             if len(photo_paths) > 1:
-                await send_photo(chat_id, photo_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับ)</b>")
+                await send_photo(chat_id, photo_paths[1], "📄 <b>หมายศาลประกอบคดี (เอกสารหมายจับจริง)</b>")
         else:
             await send_message(chat_id, caption)
-    finally:
-        for f in opened_files:
-            try:
-                f.close()
-            except Exception:
-                pass
 
 
 async def get_user(telegram_id: int) -> dict | None:
@@ -231,17 +333,18 @@ async def set_user_authorization(telegram_id: int, is_authorized: bool) -> bool:
 async def remove_telegram_menu_button(chat_id: int | None = None):
     """ลบปุ่ม Mini App, Menu Button และ Command List ออกจาก Telegram ทั้งหมดอย่างถาวร"""
     try:
-        async with aiohttp.ClientSession() as session:
-            menu_url = f"{TELEGRAM_API}/setChatMenuButton"
-            payload = {"menu_button": {"type": "default"}}
-            if chat_id:
-                payload["chat_id"] = chat_id
-            await session.post(menu_url, json=payload)
+        session = await get_telegram_session()
+        menu_url = f"{TELEGRAM_API}/setChatMenuButton"
+        payload = {"menu_button": {"type": "default"}}
+        if chat_id:
+            payload["chat_id"] = chat_id
+        await session.post(menu_url, json=payload, timeout=aiohttp.ClientTimeout(total=5))
 
-            del_cmd_url = f"{TELEGRAM_API}/deleteMyCommands"
-            await session.post(del_cmd_url, json={})
+        del_cmd_url = f"{TELEGRAM_API}/deleteMyCommands"
+        await session.post(del_cmd_url, json={}, timeout=aiohttp.ClientTimeout(total=5))
     except Exception as e:
-        logger.error(f"remove_telegram_menu_button error: {e}")
+        logger.debug(f"remove_telegram_menu_button note: {e}")
+
 
 
 async def handle_callback_query(callback_query: dict):
@@ -523,10 +626,23 @@ async def handle_telegram_update(update: dict):
     except Exception as e:
         logger.debug(f"insert media_request note: {e}")
 
-    await send_message(chat_id, "⏳ <b>ได้รับรูปภาพแล้ว</b> AI กำลังจำแนกประเภทและตรวจสอบกับฐานข้อมูลหมายจับ...")
+    ack_res = await send_message(chat_id, "⏳ <b>ได้รับรูปภาพแล้ว</b> AI กำลังจำแนกประเภทและตรวจสอบกับฐานข้อมูลหมายจับ...")
+    ack_msg_id = ack_res.get("result", {}).get("message_id") if isinstance(ack_res, dict) else None
 
-    file_path = await fetch_file_path(file_id)
-    image_bytes = await download_file(file_path)
+    try:
+        file_path = await fetch_file_path(file_id)
+        image_bytes = await download_file(file_path)
+    except Exception as ex_down:
+        logger.error(f"Error downloading photo {file_id}: {ex_down}")
+        await send_message(chat_id, f"❌ ไม่สามารถดาวน์โหลดรูปภาพจาก Telegram ได้ กรุณาลองส่งใหม่อีกครั้งครับ ({ex_down})")
+        if request_id:
+            try:
+                async with await get_connection() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("UPDATE media_requests SET status = 'failed' WHERE id = %s", (request_id,))
+            except Exception:
+                pass
+        return
 
     detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -553,6 +669,13 @@ async def handle_telegram_update(update: dict):
 
     detected_type_label = result_data.get("detected_type_label", "🔍 ภาพที่ส่งเข้ามา")
 
+    # ลบข้อความชั่วคราวออก เพื่อรวมการแสดงผลเป็นการตอบกลับครั้งเดียว
+    if ack_msg_id:
+        try:
+            await delete_message(chat_id, ack_msg_id)
+        except Exception:
+            pass
+
     if not result_data.get("found"):
         not_found_msg = (
             f"❌ <b>ไม่พบข้อมูลในฐานข้อมูลหมายจับ</b>\n"
@@ -566,21 +689,47 @@ async def handle_telegram_update(update: dict):
         item_type = item.get("type")
 
         if item_type == "face":
-            caption = format_face_result(item, detected_at)
             photo_file = item.get("photo_url")
             warrant_file = item.get("warrant_url")
+            person_name = item.get("person_name", "")
 
-            photos_to_send = []
-            if photo_file and os.path.exists(photo_file):
-                photos_to_send.append(photo_file)
-            if warrant_file and os.path.exists(warrant_file):
-                photos_to_send.append(warrant_file)
+            # ตรวจสอบและ resolve เส้นทางรูปถ่ายและหมายจับให้สมบูรณ์ (Safety Fallback)
+            if not warrant_file or not os.path.exists(warrant_file):
+                try:
+                    from app.modules.face.matcher import resolve_warrant_path
+                    resolved_w = resolve_warrant_path(person_name, photo_file, warrant_file)
+                    if resolved_w:
+                        warrant_file = resolved_w
+                        item["warrant_url"] = resolved_w
+                except Exception as ex_w:
+                    logger.debug(f"resolve_warrant_path fallback note: {ex_w}")
 
-            if len(photos_to_send) >= 2:
-                # ส่งรูปคู่: ใบหน้าตรงในฐานข้อมูล + หมายศาล
-                await send_media_group(chat_id, photos_to_send, caption)
-            elif len(photos_to_send) == 1:
-                await send_photo(chat_id, photos_to_send[0], caption)
+            if not photo_file or not os.path.exists(photo_file):
+                try:
+                    from app.modules.face.matcher import resolve_photo_path
+                    resolved_p = resolve_photo_path(person_name, photo_file)
+                    if resolved_p:
+                        photo_file = resolved_p
+                        item["photo_url"] = resolved_p
+                except Exception as ex_p:
+                    logger.debug(f"resolve_photo_path fallback note: {ex_p}")
+
+            caption = format_face_result(item, detected_at)
+
+            from app.modules.face.matcher import normalize_path
+            actual_p = normalize_path(photo_file) if photo_file else None
+            actual_w = normalize_path(warrant_file) if warrant_file else None
+
+            p_exists = actual_p and os.path.exists(actual_p)
+            w_exists = actual_w and os.path.exists(actual_w)
+
+            if p_exists and w_exists:
+                # ส่งเป็นเซ็ทอัลบั้มภาพคู่ 2 ภาพ (รูปหน้าตรง + รูปเอกสารหมายจับจริง) ในเซ็ทข้อความเดียว
+                await send_media_group(chat_id, [actual_p, actual_w], caption)
+            elif p_exists:
+                await send_photo(chat_id, actual_p, caption)
+            elif w_exists:
+                await send_photo(chat_id, actual_w, caption)
             else:
                 await send_message(chat_id, caption)
 

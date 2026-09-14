@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS face_profiles (
   source VARCHAR(255),
   face_embedding JSON,
   photo_url VARCHAR(500),
+  warrant_url VARCHAR(500),
   metadata JSON,
   found_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

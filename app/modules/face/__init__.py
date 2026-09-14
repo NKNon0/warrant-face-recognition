@@ -5,7 +5,7 @@ from .detector import (
     detect_and_crop_face,
     cv2_imread_unicode,
 )
-from .matcher import search_face, cosine_similarity
+from .matcher import search_face, cosine_similarity, resolve_warrant_path, resolve_photo_path, normalize_path
 
 __all__ = [
     "get_insightface_app",
@@ -15,4 +15,7 @@ __all__ = [
     "cv2_imread_unicode",
     "search_face",
     "cosine_similarity",
+    "resolve_warrant_path",
+    "resolve_photo_path",
+    "normalize_path",
 ]

@@ -25,6 +25,85 @@ _CACHE_MATRIX: np.ndarray | None = None
 _CACHE_METADATA: dict | None = None
 
 
+def normalize_path(p: str) -> str:
+    """แปลง Path ให้ถูกต้องและมีไฟล์อยู่จริง ไม่ว่าจะรันบน Windows หรือ Linux Docker"""
+    if not p:
+        return ""
+    if os.path.exists(p) and os.path.isfile(p):
+        return os.path.abspath(p)
+    p_slash = p.replace("\\", "/")
+    if "datatest/" in p_slash:
+        rel = p_slash[p_slash.index("datatest/"):]
+        if os.path.exists(rel) and os.path.isfile(rel):
+            return os.path.abspath(rel)
+    if "uploads/" in p_slash:
+        rel = p_slash[p_slash.index("uploads/"):]
+        if os.path.exists(rel) and os.path.isfile(rel):
+            return os.path.abspath(rel)
+    return ""
+
+
+def find_suspect_folder(suspect_name: str) -> str:
+    """ค้นหาโฟลเดอร์ของผู้ต้องสงสัยใน datatest/FACE/ อย่างยืดหยุ่น"""
+    base_dir = os.path.join(os.getcwd(), "datatest", "FACE")
+    if not os.path.exists(base_dir):
+        return ""
+    clean_target = suspect_name.replace("นาย", "").replace("น.ส.", "").replace("นางสาว", "").replace(" ", "").replace("ธิ์", "ธ์").strip()
+    for d in os.listdir(base_dir):
+        clean_d = d.replace("นาย", "").replace("น.ส.", "").replace("นางสาว", "").replace(" ", "").replace("ธิ์", "ธ์").strip()
+        if clean_target == clean_d or (len(clean_target) > 3 and clean_target[:6] in clean_d) or (len(clean_d) > 3 and clean_d[:6] in clean_target):
+            return os.path.join(base_dir, d)
+    return ""
+
+
+def resolve_warrant_path(suspect_name: str, photo_url: str = "", cached_warrant: str = "") -> str:
+    """ค้นหาไฟล์เอกสารหมายจับอย่างแม่นยำและยืดหยุ่น รองรับทั้ง Windows และ Linux Docker"""
+    norm_w = normalize_path(cached_warrant)
+    if norm_w:
+        return norm_w
+
+    search_dirs = []
+    norm_p = normalize_path(photo_url)
+    if norm_p and os.path.exists(os.path.dirname(norm_p)):
+        search_dirs.append(os.path.dirname(norm_p))
+
+    suspect_dir = find_suspect_folder(suspect_name)
+    if suspect_dir and suspect_dir not in search_dirs:
+        search_dirs.append(suspect_dir)
+
+    for s_dir in search_dirs:
+        try:
+            for f in os.listdir(s_dir):
+                f_lower = f.lower()
+                f_path = os.path.join(s_dir, f)
+                if os.path.isfile(f_path) and ("หมายจับ" in f or f_lower.startswith("2381")):
+                    if f_lower.endswith((".jpg", ".jpeg", ".png", ".webp")):
+                        return os.path.abspath(f_path)
+        except Exception:
+            continue
+
+    return ""
+
+
+def resolve_photo_path(suspect_name: str, photo_url: str = "") -> str:
+    """ค้นหาไฟล์รูปถ่ายใบหน้าตรงของผู้ต้องสงสัย รองรับทั้ง Windows และ Linux Docker"""
+    norm_p = normalize_path(photo_url)
+    if norm_p:
+        return norm_p
+
+    suspect_dir = find_suspect_folder(suspect_name)
+    if suspect_dir and os.path.isdir(suspect_dir):
+        for f in os.listdir(suspect_dir):
+            f_lower = f.lower()
+            f_path = os.path.join(suspect_dir, f)
+            if "หมายจับ" in f or f_lower.startswith("2381") or f_lower.endswith(".txt"):
+                continue
+            if f_lower.endswith((".jpg", ".jpeg", ".png", ".webp", ".jfif")):
+                return os.path.abspath(f_path)
+
+    return ""
+
+
 def get_face_cache():
     """โหลดและแคชเวกเตอร์ใบหน้าทั้งหมดขึ้น RAM เป็น NumPy Matrix เพื่อค้นหาในระดับ 1 มิลลิวินาที"""
     global _CACHE_MATRIX, _CACHE_METADATA
@@ -164,17 +243,23 @@ async def search_face(image_path: str) -> dict | None:
                 payload = top_hit.get("payload", {})
                 display_score = round(min(99.95, max(85.0, (score_sim - 0.50) / 0.50 * 20.0 + 80.0)), 2)
 
+                p_name = payload.get("person_name", "-")
+                raw_photo = payload.get("photo_url", "")
+                raw_warrant = payload.get("warrant_url", "")
+                photo_file = resolve_photo_path(p_name, raw_photo)
+                warrant_file = resolve_warrant_path(p_name, photo_file, raw_warrant)
+
                 return {
                     "found": True,
                     "type": "face",
                     "id": profile_id,
-                    "person_name": payload.get("person_name", "-"),
+                    "person_name": p_name,
                     "id_number": payload.get("id_number", "-"),
                     "detail": payload.get("detail", "-"),
                     "station": payload.get("station", "-"),
                     "court": payload.get("court", "-"),
-                    "photo_url": payload.get("photo_url", ""),
-                    "warrant_url": payload.get("warrant_url", ""),
+                    "photo_url": photo_file,
+                    "warrant_url": warrant_file,
                     "score": display_score,
                     "engine": "Qdrant HNSW 512D ArcFace",
                 }
@@ -209,17 +294,23 @@ async def search_face(image_path: str) -> dict | None:
             # มีความแม่นยำสูงมาก ตัดคนไม่เกี่ยว (ความคล้าย < 0.35) และจับคู่ผู้ต้องหาจริงได้อย่างแม่นยำสูง
             if best_sim >= 0.48:
                 display_score = round(min(99.95, max(75.0, (best_sim - 0.40) / 0.60 * 24.95 + 75.0)), 2)
+                p_name = str(metadata["names"][best_idx])
+                raw_photo = str(metadata["photo_urls"][best_idx])
+                raw_warrant = str(metadata["warrant_urls"][best_idx]) if "warrant_urls" in metadata else ""
+                photo_file = resolve_photo_path(p_name, raw_photo)
+                warrant_file = resolve_warrant_path(p_name, photo_file, raw_warrant)
+
                 return {
                     "found": True,
                     "type": "face",
                     "id": int(metadata["ids"][best_idx]),
-                    "person_name": str(metadata["names"][best_idx]),
+                    "person_name": p_name,
                     "id_number": str(metadata["id_numbers"][best_idx]) if "id_numbers" in metadata else "-",
                     "detail": str(metadata["details"][best_idx]),
                     "station": str(metadata["stations"][best_idx]),
                     "court": str(metadata["courts"][best_idx]),
-                    "photo_url": str(metadata["photo_urls"][best_idx]),
-                    "warrant_url": str(metadata["warrant_urls"][best_idx]) if "warrant_urls" in metadata else "",
+                    "photo_url": photo_file,
+                    "warrant_url": warrant_file,
                     "score": display_score,
                     "engine": "InsightFace ResNet50 ArcFace (Vectorized 1ms)",
                 }

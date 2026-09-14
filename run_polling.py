@@ -1,12 +1,15 @@
 import asyncio
 import aiohttp
 import sys
+import os
 import io
+import logging
 from pathlib import Path
 
-# Force stdout to UTF-8 to handle Thai characters in logs with immediate flushing
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+# Force stdout/stderr to UTF-8 with immediate write-through (unbuffered)
+sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True, write_through=True)
+sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True, write_through=True)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", force=True)
 
 # Add project root to Python path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -22,30 +25,30 @@ async def main():
     # Initialize DB connection pool
     await init_db()
 
-    print("[AI Warmup] Preloading InsightFace, YOLOv8, and PaddleOCR models into memory...")
+    print("[AI Warmup] Preloading InsightFace, YOLOv8, and PaddleOCR models into memory...", flush=True)
     try:
         await asyncio.to_thread(get_insightface_app)
         await asyncio.to_thread(get_yolo_plate_model)
         await asyncio.to_thread(get_paddleocr_engine)
-        print("[AI Warmup] ✅ All AI models warm in memory (Zero latency)!")
+        print("[AI Warmup] ✅ All AI models warm in memory (Zero latency)!", flush=True)
     except Exception as e:
-        print(f"[AI Warmup Note]: {e}")
+        print(f"[AI Warmup Note]: {e}", flush=True)
 
     # Reset any remaining Telegram menu button to default
     await remove_telegram_menu_button()
 
-    print("\n" + "="*50)
-    print(" 🤖 Telegram Bot Polling Mode Started... (กำลังทำงาน)")
-    print(" บอทจะคอยดึงข้อความจาก Telegram มาประมวลผลทันที")
-    print(" สถาปัตยกรรม: Domain-Driven Modular Multi-Modal AI")
-    print("="*50 + "\n")
+    print("\n" + "="*50, flush=True)
+    print(" 🤖 Telegram Bot Polling Mode Started... (กำลังทำงาน)", flush=True)
+    print(" บอทจะคอยดึงข้อความจาก Telegram มาประมวลผลทันที", flush=True)
+    print(" สถาปัตยกรรม: Domain-Driven Modular Multi-Modal AI", flush=True)
+    print("="*50 + "\n", flush=True)
 
     async with aiohttp.ClientSession() as session:
         # Delete webhook first (otherwise getUpdates will fail)
-        print("[INFO] ลบการตั้งค่า Webhook เก่าเพื่อให้ใช้ Polling ได้...")
+        print("[INFO] ลบการตั้งค่า Webhook เก่าเพื่อให้ใช้ Polling ได้...", flush=True)
         async with session.get(f"{TELEGRAM_API}/deleteWebhook") as resp:
             data = await resp.json()
-            print(f"[INFO] ลบ Webhook: {data.get('description', 'สำเร็จ')}")
+            print(f"[INFO] ลบ Webhook: {data.get('description', 'สำเร็จ')}", flush=True)
 
         offset = 0
         while True:
@@ -58,19 +61,19 @@ async def main():
                         if res.get("ok"):
                             for update in res.get("result", []):
                                 offset = update["update_id"] + 1
-                                print(f"[RECEIVED] ได้รับข้อความใหม่! Update ID: {update.get('update_id')}")
+                                print(f"[RECEIVED] ได้รับข้อความใหม่! Update ID: {update.get('update_id')}", flush=True)
 
                                 # Wrapper เพื่อดักจับและแสดงผล Error ของแต่ละข้อความ
                                 async def run_and_log(upd):
                                     try:
                                         await handle_telegram_update(upd)
-                                        print(f"[SUCCESS] ประมวลผล Update ID: {upd.get('update_id')} เสร็จสิ้น")
+                                        print(f"[SUCCESS] ประมวลผล Update ID: {upd.get('update_id')} เสร็จสิ้น", flush=True)
                                     except Exception as ex:
-                                        print(f"[ERROR] ประมวลผล Update ID: {upd.get('update_id')} ล้มเหลว: {ex}")
+                                        print(f"[ERROR] ประมวลผล Update ID: {upd.get('update_id')} ล้มเหลว: {ex}", flush=True)
 
                                 asyncio.create_task(run_and_log(update))
             except Exception as e:
-                print(f"[ERROR] เกิดข้อผิดพลาดใน Polling loop: {e}")
+                print(f"[ERROR] เกิดข้อผิดพลาดใน Polling loop: {e}", flush=True)
 
             await asyncio.sleep(1)
 

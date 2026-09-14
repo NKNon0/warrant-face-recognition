@@ -4,8 +4,16 @@ import os
 def format_face_result(result: dict, detected_at: str) -> str:
     """สร้างข้อความผลลัพธ์การตรวจพบใบหน้าบุคคลตามหมายจับ"""
     score = result.get("score", 0.0)
-    warrant_path = result.get("warrant_url")
-    warrant_status = " (พร้อมแนบภาพหมายศาลคู่)" if warrant_path and os.path.exists(warrant_path) else ""
+    warrant_path = result.get("warrant_url", "")
+    warrant_has_doc = False
+    if warrant_path:
+        try:
+            from app.modules.face.matcher import normalize_path
+            norm_w = normalize_path(warrant_path) or warrant_path
+            warrant_has_doc = bool(norm_w and os.path.exists(norm_w))
+        except Exception:
+            warrant_has_doc = os.path.exists(warrant_path)
+    warrant_status = " (แนบภาพหน้าตรง + เอกสารหมายจับ)" if warrant_has_doc else ""
     text = (
         f"🚨 <b>ผลการตรวจพบใบหน้าบุคคลเป้าหมาย!</b>{warrant_status}\n"
         f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> 👤 ใบหน้าบุคคล\n"
