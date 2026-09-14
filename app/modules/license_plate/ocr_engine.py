@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import asyncio
 import pytesseract
@@ -115,7 +116,7 @@ async def search_license_plate(image_path: str) -> dict | None:
             for c_img in all_candidates:
                 paddle_text = await asyncio.to_thread(_paddle_pass, c_img)
                 if paddle_text:
-                    clean_txt = "".join(ch for ch in paddle_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
+                    clean_txt = re.sub(r'[^a-zA-Z0-9ก-๙\s]', '', paddle_text).strip()
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:
@@ -123,7 +124,7 @@ async def search_license_plate(image_path: str) -> dict | None:
                             match["plate_type_label"] = plate_type_label
                             return match
 
-        # 2. Fast Fallback Pass: PyTesseract Engine (หากมีการติดตั้ง)
+        # 2. Fast Fallback Pass: PyTesseract Engine (Multi-Mode PSM)
         def _ocr_pass(img_input, psm_mode):
             try:
                 return pytesseract.image_to_string(img_input, lang="tha+eng", config=f"--psm {psm_mode}").strip()
@@ -131,10 +132,10 @@ async def search_license_plate(image_path: str) -> dict | None:
                 return ""
 
         for c_img in all_candidates:
-            for psm in [7, 6]:
+            for psm in [11, 3, 6, 7]:
                 raw_text = await asyncio.to_thread(_ocr_pass, c_img, psm)
                 if raw_text:
-                    clean_txt = "".join(ch for ch in raw_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
+                    clean_txt = re.sub(r'[^a-zA-Z0-9ก-๙\s]', '', raw_text).strip()
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:

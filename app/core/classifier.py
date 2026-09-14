@@ -1,6 +1,8 @@
 import logging
 import re
 import cv2
+import numpy as np
+import pytesseract
 from app.modules.face.detector import cv2_imread_unicode, get_insightface_app, detect_and_crop_face
 from app.modules.license_plate.detector import get_yolo_plate_model
 from app.modules.license_plate.ocr_engine import get_paddleocr_engine, extract_paddle_text
@@ -23,10 +25,50 @@ THAI_PROVINCES = [
 ]
 
 
+def extract_quick_ocr_text(img: np.ndarray) -> str:
+    """สกัดข้อความความเร็วสูงสำหรับวิเคราะห์จำแนกประเภทของรูปภาพ (< 0.2s)"""
+    extracted_texts = []
+
+    # 1. ลองใช้ PaddleOCR หากมีติดตั้ง
+    paddle = get_paddleocr_engine()
+    if paddle is not None:
+        try:
+            res = paddle.ocr(img)
+            p_text = extract_paddle_text(res)
+            if p_text:
+                extracted_texts.append(p_text)
+        except Exception:
+            pass
+
+    # 2. ใช้ PyTesseract (Tha + Eng)
+    try:
+        h, w = img.shape[:2]
+        max_d = 900
+        if max(h, w) > max_d:
+            scale = max_d / float(max(h, w))
+            small = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        else:
+            small = img
+
+        t_text = pytesseract.image_to_string(small, lang="tha+eng", config="--psm 11")
+        if t_text:
+            extracted_texts.append(t_text)
+
+        # หากเป็นภาพขนาดใหญ่ ให้ลองอ่านแบบเดิมเสริม
+        if small is not img:
+            t_orig = pytesseract.image_to_string(img, lang="tha+eng", config="--psm 11")
+            if t_orig:
+                extracted_texts.append(t_orig)
+    except Exception as e:
+        logger.debug(f"[Classifier] PyTesseract error: {e}")
+
+    return " \n ".join(extracted_texts).strip()
+
+
 def classify_image_type(image_path: str) -> tuple[str, float]:
     """
     AI Multi-Modal Image Classifier:
-    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ (ความเร็วสูงพิเศษ):
+    วิเคราะห์และจำแนกประเภทของรูปภาพที่ส่งเข้ามาโดยอัตโนมัติ ออกเป็น 3 ส่วนชัดเจน:
     1. 'idcard' -> 🪪 บัตรประจำตัวประชาชน
     2. 'plate'  -> 🚗 ป้ายทะเบียนรถยนต์/รถจักรยานยนต์
     3. 'face'   -> 👤 ใบหน้าบุคคลต้องสงสัย
@@ -40,63 +82,46 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         h_orig, w_orig = img.shape[:2]
         aspect_ratio = float(w_orig) / float(h_orig) if h_orig > 0 else 1.0
 
-        # ปรับขนาดภาพสำหรับการจำแนกประเภทความเร็วสูง (Max Dim 640px)
-        max_dim = 640
-        if max(h_orig, w_orig) > max_dim:
-            scale = float(max_dim) / float(max(h_orig, w_orig))
-            quick_img = cv2.resize(img, (int(w_orig * scale), int(h_orig * scale)), interpolation=cv2.INTER_AREA)
-        else:
-            quick_img = img
+        # สกัดข้อความในภาพอย่างรวดเร็ว
+        ocr_text = extract_quick_ocr_text(img)
 
-        # --- 1. ตรวจสอบ ใบหน้าบุคคล (Face Detection) ก่อนเสมอ เพราะโมเดล SCRFD ทำงานได้เร็วที่สุด (< 0.15s) ---
-        has_face = False
-        face_conf = 0.0
-        iface_app = get_insightface_app()
-        if iface_app is not None:
-            try:
-                faces = iface_app.get(quick_img)
-                if faces and len(faces) > 0:
-                    best_face = max(faces, key=lambda f: float(f.det_score))
-                    face_conf = float(best_face.det_score)
-                    if face_conf >= 0.45:
-                        has_face = True
-            except Exception:
-                pass
+        # =========================================================================
+        # ส่วนที่ 1: ตรวจสอบบัตรประจำตัวประชาชน (Thai National ID Card)
+        # =========================================================================
+        id_keywords = [
+            "บัตรประจำตัวประชาชน", "บัตรประจําตัวประชาชน", "Thai National ID Card",
+            "National ID", "ประจำตัวประชาชน", "ประจําตัวประชาชน", "เกิดวันที่",
+            "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ",
+            "Identification Number", "Date of Birth", "Date of Issue", "Date of Expiry"
+        ]
+        has_id_keyword = any(k in ocr_text for k in id_keywords)
+        has_13_digits = bool(extract_id_number(ocr_text))
 
-        if not has_face and detect_and_crop_face(image_path) is not None:
-            has_face = True
-            face_conf = 0.80
+        # หากมีคีย์เวิร์ดบัตรประชาชน หรือมีเลขประจำตัวประชาชน 13 หลัก ให้เป็น ID Card ทันที
+        # แม้ว่าบนบัตรจะมีรูปหน้าตรงอยู่ก็ตาม
+        if has_id_keyword or has_13_digits:
+            return "idcard", 0.99
 
-        # ถ้าพบใบหน้าบุคคล และสัดส่วนภาพไม่ใช่บัตรประชาชนแนวนอน (สัดส่วนทั่วไป < 1.30 หรือ > 1.90)
-        # ให้ระบุเป็นใบหน้าบุคคลทันทีโดยไม่ต้องรัน PaddleOCR ให้เสียเวลา
-        if has_face:
-            if not (1.30 <= aspect_ratio <= 1.90):
-                return "face", round(max(0.85, face_conf), 2)
+        # =========================================================================
+        # ส่วนที่ 2: ตรวจสอบป้ายทะเบียนรถ (License Plate)
+        # =========================================================================
+        has_province = any(prov in ocr_text for prov in THAI_PROVINCES)
+        plate_text_clean = "".join(ch for ch in ocr_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
+        digits_in_text = re.findall(r"\d+", plate_text_clean)
+        thai_in_text = re.findall(r"[ก-ฮ]+", plate_text_clean)
 
-            # กรณีพบใบหน้าแต่สัดส่วนภาพคล้ายบัตรประชาชนแนวนอน (1.30 - 1.90) ตรวจสอบข้อความบัตรประชาชน
-            paddle_ocr = get_paddleocr_engine()
-            ocr_text = ""
-            if paddle_ocr is not None:
-                try:
-                    res = paddle_ocr.ocr(quick_img)
-                    ocr_text = extract_paddle_text(res)
-                except Exception:
-                    pass
+        # ตรวจหาแพทเทิร์นป้ายทะเบียนไทย เช่น 1กย 889, กย 889, ขนษ 660, 4กฆ 1819
+        plate_pattern_match = bool(re.search(r'[0-9]?[ก-ฮ]{1,3}\s*[0-9]{1,4}', ocr_text))
 
-            id_keywords = [
-                "บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่",
-                "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ",
-                "Identification Number", "Date of Birth", "Date of Issue", "Date of Expiry"
-            ]
-            if any(k in ocr_text for k in id_keywords):
-                return "idcard", 0.98
-            return "face", round(max(0.85, face_conf), 2)
+        # ก) ตรวจสอบจากข้อความ OCR (มีจังหวัด + ตัวเลข หรือ ตรงตามแพทเทิร์นป้าย)
+        if (has_province and digits_in_text) or (plate_pattern_match and digits_in_text):
+            return "plate", 0.96
 
-        # --- 2. กรณีไม่พบใบหน้าบุคคล: ตรวจสอบป้ายทะเบียนด้วย YOLO (< 0.05s) ---
+        # ข) ตรวจสอบด้วยโมเดล YOLO Plate Detector
         yolo = get_yolo_plate_model()
         if yolo is not None:
             try:
-                y_res = yolo.predict(quick_img, verbose=False, conf=0.30)
+                y_res = yolo.predict(img, verbose=False, conf=0.35)
                 if y_res and len(y_res) > 0 and len(y_res[0].boxes) > 0:
                     box = y_res[0].boxes[0]
                     conf = float(box.conf[0])
@@ -109,51 +134,40 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
             except Exception:
                 pass
 
-        # --- 3. ตรวจสอบข้อความด้วย PaddleOCR (เมื่อไม่พบทั้งใบหน้าและโมเดลตรวจจับป้าย) ---
-        paddle_ocr = get_paddleocr_engine()
-        ocr_text = ""
-        if paddle_ocr is not None:
+        if has_province and thai_in_text:
+            return "plate", 0.92
+
+        # =========================================================================
+        # ส่วนที่ 3: ตรวจสอบใบหน้าบุคคล (Face Recognition)
+        # =========================================================================
+        has_face = False
+        face_conf = 0.0
+        iface_app = get_insightface_app()
+        if iface_app is not None:
             try:
-                res = paddle_ocr.ocr(quick_img)
-                ocr_text = extract_paddle_text(res)
-            except Exception as e:
-                logger.debug(f"[Classifier] PaddleOCR check note: {e}")
+                faces = iface_app.get(img)
+                if faces and len(faces) > 0:
+                    best_face = max(faces, key=lambda f: float(f.det_score))
+                    face_conf = float(best_face.det_score)
+                    if face_conf >= 0.45:
+                        has_face = True
+            except Exception:
+                pass
 
-        # ก) ตรวจสอบบัตรประชาชน (Thai ID Card)
-        id_keywords = [
-            "บัตรประจำตัวประชาชน", "Thai National ID Card", "ประจำตัวประชาชน", "เกิดวันที่",
-            "ศาสนา", "ที่อยู่", "ชื่อตัวและชื่อสกุล", "วันออกบัตร", "วันบัตรหมดอายุ",
-            "Identification Number", "Date of Birth", "Date of Issue", "Date of Expiry"
-        ]
-        has_id_keyword = any(k in ocr_text for k in id_keywords)
-        has_13_digits = bool(extract_id_number(ocr_text))
+        if not has_face and detect_and_crop_face(image_path) is not None:
+            has_face = True
+            face_conf = 0.80
 
-        if has_id_keyword and (has_13_digits or len(ocr_text) > 25):
-            return "idcard", 0.98
+        if has_face:
+            return "face", round(max(0.85, face_conf), 2)
 
-        # ข) ตรวจสอบป้ายทะเบียนรถ (License Plate) จากข้อความ
-        has_province = any(prov in ocr_text for prov in THAI_PROVINCES)
-        plate_text_clean = "".join(ch for ch in ocr_text if ch.isalnum() or ch in " กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ")
-        digits_in_text = re.findall(r"\d+", plate_text_clean)
-        thai_in_text = re.findall(r"[ก-ฮ]+", plate_text_clean)
-
-        is_plate_by_text = False
-        if has_province and (digits_in_text or thai_in_text):
-            is_plate_by_text = True
-        elif digits_in_text and thai_in_text:
-            if len(plate_text_clean) <= 25 and len(digits_in_text[0]) <= 4:
-                is_plate_by_text = True
-
-        if is_plate_by_text:
-            return "plate", 0.96
-
-        # --- 4. กฎสัดส่วนภาพและลักษณะเฉพาะ (Fallback Heuristics) ---
+        # =========================================================================
+        # Fallback Heuristics สำหรับภาพขอบเขตพิเศษ
+        # =========================================================================
         if aspect_ratio >= 1.8:
             return "plate", 0.75
-        elif 1.30 <= aspect_ratio <= 1.90:
-            if len(ocr_text) >= 10:
-                return "idcard", 0.70
-            return "plate", 0.65
+        elif 1.30 <= aspect_ratio <= 1.90 and len(ocr_text) >= 10:
+            return "idcard", 0.70
 
         if digits_in_text and len(plate_text_clean) <= 15:
             return "plate", 0.75

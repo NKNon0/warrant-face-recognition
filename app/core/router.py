@@ -93,32 +93,30 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
         results = []
 
         if mode == "auto" or mode == "all":
-            # ลำดับการตรวจสอบตามผลการจำแนกประเภท (Smart Ordered Pipeline)
+            # ลำดับการตรวจสอบตามผลการจำแนกประเภท (Smart Ordered Pipeline 3 ส่วน)
             pipeline_order = [predicted_type]
-            for t in ["face", "plate", "idcard"]:
+            for t in ["idcard", "plate", "face"]:
                 if t not in pipeline_order:
                     pipeline_order.append(t)
 
             for target_type in pipeline_order:
-                if target_type == "face":
-                    face_result = await search_face(image_path)
-                    if face_result and face_result.get("type") != "no_face":
-                        if face_result.get("found"):
-                            face_result["detected_type"] = "face"
-                            face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
-                            results.append(face_result)
-                            await save_search_result(
-                                request_id=request_id,
-                                result_type="face",
-                                match_score=face_result.get("score", 0.0),
-                                matched_record_id=face_result.get("id"),
-                                details=face_result,
-                            )
-                            break
-                        elif face_result.get("detected_face"):
-                            # ตรวจพบใบหน้าชัดเจนแต่ไม่พบหมายจับในฐานข้อมูล ยุติ pipeline ทันที
-                            # ป้องกันการ fall-through ไปทำ OCR ป้ายทะเบียนหรือบัตรประชาชนให้เสียเวลา
-                            break
+                if target_type == "idcard":
+                    id_card_result = await search_id_card(image_path)
+                    if id_card_result:
+                        id_dict = {"type": "id_card", **id_card_result}
+                        id_dict["detected_type"] = "id_card"
+                        id_dict["detected_type_label"] = "🪪 บัตรประจำตัวประชาชน"
+                        results.append(id_dict)
+                        detected_label = "🪪 บัตรประจำตัวประชาชน"
+                        predicted_type = "idcard"
+                        await save_search_result(
+                            request_id=request_id,
+                            result_type="id_card",
+                            match_score=id_dict.get("score", 99.0),
+                            matched_record_id=id_card_result.get("id"),
+                            details=id_card_result,
+                        )
+                        break
 
                 elif target_type == "plate":
                     plate_result = await search_license_plate(image_path)
@@ -127,6 +125,8 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
                         p_dict["detected_type"] = "plate"
                         p_dict["detected_type_label"] = "🚗 ป้ายทะเบียนรถ"
                         results.append(p_dict)
+                        detected_label = "🚗 ป้ายทะเบียนรถ"
+                        predicted_type = "plate"
                         await save_search_result(
                             request_id=request_id,
                             result_type="license_plate",
@@ -136,21 +136,23 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
                         )
                         break
 
-                elif target_type == "idcard":
-                    id_card_result = await search_id_card(image_path)
-                    if id_card_result:
-                        id_dict = {"type": "id_card", **id_card_result}
-                        id_dict["detected_type"] = "id_card"
-                        id_dict["detected_type_label"] = "🪪 บัตรประจำตัวประชาชน"
-                        results.append(id_dict)
-                        await save_search_result(
-                            request_id=request_id,
-                            result_type="id_card",
-                            match_score=id_dict.get("score", 99.0),
-                            matched_record_id=id_card_result.get("id"),
-                            details=id_card_result,
-                        )
-                        break
+                elif target_type == "face":
+                    face_result = await search_face(image_path)
+                    if face_result and face_result.get("type") != "no_face":
+                        if face_result.get("found"):
+                            face_result["detected_type"] = "face"
+                            face_result["detected_type_label"] = "👤 ใบหน้าบุคคล"
+                            results.append(face_result)
+                            detected_label = "👤 ใบหน้าบุคคล"
+                            predicted_type = "face"
+                            await save_search_result(
+                                request_id=request_id,
+                                result_type="face",
+                                match_score=face_result.get("score", 0.0),
+                                matched_record_id=face_result.get("id"),
+                                details=face_result,
+                            )
+                            break
 
         elif mode == "face":
             face_result = await search_face(image_path)

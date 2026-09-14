@@ -72,6 +72,34 @@ async def find_license_plate(text: str) -> dict | None:
             db_digits = "".join(re.findall(r"\d+", db_plate))
             db_thai = "".join(re.findall(r"[ก-ฮ]+", db_plate))
 
+            # ก) ตรวจสอบจังหวัดตรงกัน + ตัวเลขป้ายตรงกัน (เช่น 889 หรือ 1889 ใน กรุงเทพมหานคร)
+            if db_prov and db_prov in clean_query and db_digits and q_digits:
+                if db_digits == q_digits or db_digits.endswith(q_digits) or q_digits.endswith(db_digits):
+                    return {
+                        "type": "plate",
+                        "id": p["id"],
+                        "plate_text": p.get("plate_text", "-"),
+                        "province": p.get("province", "-"),
+                        "detail": p.get("detail", "-"),
+                        "station": p.get("station", "-"),
+                        "category": p.get("category", "-"),
+                        "score": 98.85,
+                    }
+
+            # ข) ตรวจสอบหมวดอักษรไทยตรงกัน + ตัวเลขป้ายตรงกัน
+            if db_thai and db_thai in q_thai and db_digits and q_digits:
+                if db_digits == q_digits or db_digits.endswith(q_digits) or q_digits.endswith(db_digits):
+                    return {
+                        "type": "plate",
+                        "id": p["id"],
+                        "plate_text": p.get("plate_text", "-"),
+                        "province": p.get("province", "-"),
+                        "detail": p.get("detail", "-"),
+                        "station": p.get("station", "-"),
+                        "category": p.get("category", "-"),
+                        "score": 99.00,
+                    }
+
             if db_digits and db_digits == q_digits and db_thai and db_thai in q_thai:
                 return {
                     "type": "plate",

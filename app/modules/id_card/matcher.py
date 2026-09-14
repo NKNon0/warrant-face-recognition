@@ -1,3 +1,4 @@
+import json
 import logging
 import asyncio
 import cv2
@@ -20,7 +21,32 @@ async def find_warrant_by_id_number(id_num: str) -> dict | None:
     try:
         async with await get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                # 1. ค้นหาในตาราง warrants
+                # 1. ค้นหาในตาราง id_cards (ฐานข้อมูลหลัก 63 รายการ)
+                await cur.execute(
+                    "SELECT id, id_number, name, metadata FROM id_cards WHERE id_number = %s",
+                    (clean_id,),
+                )
+                res_idc = await cur.fetchone()
+                if res_idc:
+                    meta = {}
+                    if res_idc.get("metadata"):
+                        try:
+                            meta = json.loads(res_idc["metadata"]) if isinstance(res_idc["metadata"], str) else res_idc["metadata"]
+                        except Exception:
+                            pass
+                    return {
+                        "type": "id_card",
+                        "id": res_idc["id"],
+                        "id_number": res_idc.get("id_number", "-"),
+                        "person_name": res_idc.get("name", "-"),
+                        "detail": meta.get("detail") or "พบบุคคลเป้าหมายเฝ้าระวังตามหมายจับ",
+                        "station": meta.get("station") or "สน.ตำรวจนครบาล",
+                        "court": meta.get("court") or "ศาลอาญา",
+                        "score": 99.85,
+                        "match_method": "ID Cards Database Match",
+                    }
+
+                # 2. ค้นหาในตาราง warrants
                 await cur.execute(
                     "SELECT id, id_number, person_name, detail, station, court FROM warrants WHERE id_number = %s",
                     (clean_id,),
@@ -39,7 +65,7 @@ async def find_warrant_by_id_number(id_num: str) -> dict | None:
                         "match_method": "Exact 13-Digit ID Checksum",
                     }
 
-                # 2. ค้นหาในตาราง face_profiles (ถ้ามี id_number บันทึกไว้)
+                # 3. ค้นหาในตาราง face_profiles (ถ้ามี id_number บันทึกไว้)
                 await cur.execute(
                     "SELECT id, id_number, person_name, detail, station, court FROM face_profiles WHERE id_number = %s",
                     (clean_id,),
@@ -76,7 +102,34 @@ async def find_warrant_by_name(person_name: str) -> dict | None:
     try:
         async with await get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
-                # 1. Exact Name Match ใน warrants
+                # 1. ค้นหาในตาราง id_cards
+                await cur.execute(
+                    "SELECT id, id_number, name, metadata FROM id_cards WHERE name LIKE %s",
+                    (f"%{first_name}%",),
+                )
+                rows_idc = await cur.fetchall()
+                for r in rows_idc:
+                    db_name = r.get("name", "")
+                    if first_name in db_name and (not last_name or last_name in db_name):
+                        meta = {}
+                        if r.get("metadata"):
+                            try:
+                                meta = json.loads(r["metadata"]) if isinstance(r["metadata"], str) else r["metadata"]
+                            except Exception:
+                                pass
+                        return {
+                            "type": "id_card",
+                            "id": r["id"],
+                            "id_number": r.get("id_number", "-"),
+                            "person_name": r.get("name", "-"),
+                            "detail": meta.get("detail") or "พบบุคคลเป้าหมายเฝ้าระวังตามหมายจับ",
+                            "station": meta.get("station") or "สน.ตำรวจนครบาล",
+                            "court": meta.get("court") or "ศาลอาญา",
+                            "score": 98.85,
+                            "match_method": "ID Cards Name Match",
+                        }
+
+                # 2. Exact Name Match ใน warrants
                 await cur.execute(
                     "SELECT id, id_number, person_name, detail, station, court FROM warrants WHERE person_name LIKE %s",
                     (f"%{first_name}%",),
@@ -108,7 +161,7 @@ from app.modules.license_plate.ocr_engine import get_paddleocr_engine, extract_p
 async def search_id_card(image_path: str) -> dict | None:
     """
     ระบบค้นหาข้อมูลจากบัตรประชาชน (Thai ID Card Deep OCR & Warrant Matcher)
-    ใช้ PaddleOCR เป็นเอนจินหลัก ความเร็วสูงและแม่นยำภาษาไทยระดับ 99%
+    รองรับทั้ง PaddleOCR และ PyTesseract Multi-Pass
     """
     try:
         image = cv2_imread_unicode(image_path)
@@ -117,7 +170,7 @@ async def search_id_card(image_path: str) -> dict | None:
 
         ocr_texts = []
 
-        # 1. High-Speed Pass: PaddleOCR Engine
+        # 1. High-Speed Pass: PaddleOCR Engine (หากมี)
         paddle_ocr = get_paddleocr_engine()
         if paddle_ocr is not None:
             def _paddle_run(img_in):
@@ -132,27 +185,27 @@ async def search_id_card(image_path: str) -> dict | None:
             if paddle_text:
                 ocr_texts.append(paddle_text)
 
-        # 2. Enhanced Image Pass (หากไม่พบข้อความในรอบแรก)
-        if not ocr_texts:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            enhanced = enhance_id_card_contrast(gray)
-            if paddle_ocr is not None:
-                enh_text = await asyncio.to_thread(_paddle_run, enhanced)
-                if enh_text:
-                    ocr_texts.append(enh_text)
-
-        # 3. Fallback: PyTesseract (ถ้ามี)
-        def _tesseract_call(img_in):
+        # 2. Multi-Mode Tesseract OCR Pass (PSM 11, 6, 3)
+        def _tesseract_call(img_in, psm_mode):
             try:
-                return pytesseract.image_to_string(img_in, lang="tha+eng", config="--psm 6")
+                return pytesseract.image_to_string(img_in, lang="tha+eng", config=f"--psm {psm_mode}")
             except Exception:
                 return ""
 
-        tess_text = await asyncio.to_thread(_tesseract_call, image)
-        if tess_text:
-            ocr_texts.append(tess_text)
+        for psm in [11, 6, 3]:
+            tess_text = await asyncio.to_thread(_tesseract_call, image, psm)
+            if tess_text:
+                ocr_texts.append(tess_text)
 
-        combined_text = " ".join(ocr_texts).strip()
+        # 3. Enhanced Image Pass (Grayscale + Contrast)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        enhanced = enhance_id_card_contrast(gray)
+        for psm in [11, 6]:
+            enh_text = await asyncio.to_thread(_tesseract_call, enhanced, psm)
+            if enh_text:
+                ocr_texts.append(enh_text)
+
+        combined_text = " \n ".join(ocr_texts).strip()
         if not combined_text:
             return None
 
