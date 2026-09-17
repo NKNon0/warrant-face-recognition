@@ -52,6 +52,14 @@ async def find_license_plate(text: str) -> dict | None:
     if not clean_query:
         return None
 
+    # สกัดตัวเลขและตัวอักษรภาษาไทยจากคำค้นหา
+    q_digits = "".join(re.findall(r"\d+", clean_query))
+    q_thai = "".join(re.findall(r"[ก-ฮ]+", clean_query))
+
+    # ป้ายทะเบียนต้องมีตัวเลขอย่างน้อย 1 หลักเสมอ หากไม่มีตัวเลขเลย (เช่น อ่านได้แค่ชื่อจังหวัด) ไม่สามารถระบุคันได้
+    if not q_digits:
+        return None
+
     try:
         async with await get_connection() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -66,41 +74,26 @@ async def find_license_plate(text: str) -> dict | None:
             db_prov = normalize_license_plate_text(p.get("province", ""))
             full_db_text = f"{db_plate}{db_prov}"
 
-            # 0. Smart Thai Plate Structure Match (Letters + Digits Layout Agnostic)
-            q_digits = "".join(re.findall(r"\d+", clean_query))
-            q_thai = "".join(re.findall(r"[ก-ฮ]+", clean_query))
             db_digits = "".join(re.findall(r"\d+", db_plate))
             db_thai = "".join(re.findall(r"[ก-ฮ]+", db_plate))
 
-            # ก) ตรวจสอบจังหวัดตรงกัน + ตัวเลขป้ายตรงกัน (เช่น 889 หรือ 1889 ใน กรุงเทพมหานคร)
-            if db_prov and db_prov in clean_query and db_digits and q_digits:
-                if db_digits == q_digits or db_digits.endswith(q_digits) or q_digits.endswith(db_digits):
-                    return {
-                        "type": "plate",
-                        "id": p["id"],
-                        "plate_text": p.get("plate_text", "-"),
-                        "province": p.get("province", "-"),
-                        "detail": p.get("detail", "-"),
-                        "station": p.get("station", "-"),
-                        "category": p.get("category", "-"),
-                        "score": 98.85,
-                    }
+            # กฎเหล็ก: ตัวเลขป้ายต้องสอดคล้องกัน หากตัวเลขคนละชุดกันโดยสิ้นเชิง ห้ามจับคู่
+            digits_match = False
+            if db_digits and q_digits:
+                if db_digits == q_digits:
+                    digits_match = True
+                elif len(q_digits) >= 2 and len(db_digits) >= 2:
+                    if db_digits.endswith(q_digits) or q_digits.endswith(db_digits) or db_digits in q_digits or q_digits in db_digits:
+                        digits_match = True
 
-            # ข) ตรวจสอบหมวดอักษรไทยตรงกัน + ตัวเลขป้ายตรงกัน
-            if db_thai and db_thai in q_thai and db_digits and q_digits:
-                if db_digits == q_digits or db_digits.endswith(q_digits) or q_digits.endswith(db_digits):
-                    return {
-                        "type": "plate",
-                        "id": p["id"],
-                        "plate_text": p.get("plate_text", "-"),
-                        "province": p.get("province", "-"),
-                        "detail": p.get("detail", "-"),
-                        "station": p.get("station", "-"),
-                        "category": p.get("category", "-"),
-                        "score": 99.00,
-                    }
+            if not digits_match:
+                continue
 
-            if db_digits and db_digits == q_digits and db_thai and db_thai in q_thai:
+            prov_match = bool(db_prov and db_prov in clean_query)
+            thai_match = bool(db_thai and (db_thai in q_thai or q_thai in db_thai))
+
+            # 1. ตรงกันทั้ง หมวดอักษร + ตัวเลข + จังหวัด (ความแม่นยำ 99.85%)
+            if digits_match and thai_match and prov_match:
                 return {
                     "type": "plate",
                     "id": p["id"],
@@ -112,38 +105,28 @@ async def find_license_plate(text: str) -> dict | None:
                     "score": 99.85,
                 }
 
-            # 1. Exact Match
-            if db_plate and db_plate == clean_query:
-                return {
-                    "type": "plate",
-                    "id": p["id"],
-                    "plate_text": p.get("plate_text", "-"),
-                    "province": p.get("province", "-"),
-                    "detail": p.get("detail", "-"),
-                    "station": p.get("station", "-"),
-                    "category": p.get("category", "-"),
-                    "score": 99.85,
-                }
-
-            # 2. Contains Match
-            if db_plate and (db_plate in clean_query or clean_query in full_db_text):
-                score = 96.50
+            # 2. ตรงกัน หมวดอักษร + ตัวเลข (ความแม่นยำ 99.00%)
+            if digits_match and thai_match:
+                score = 99.00
                 if score > best_score:
                     best_score = score
                     best_match = p
 
-            # 3. Levenshtein Fuzzy Similarity
-            sim_plate = levenshtein_similarity(clean_query, db_plate)
-            sim_full = levenshtein_similarity(clean_query, full_db_text)
-            sim = max(sim_plate, sim_full)
-
-            if sim >= 0.75:
-                calc_score = round(sim * 100.0, 2)
-                if calc_score > best_score:
-                    best_score = calc_score
+            # 3. ตรงกัน จังหวัด + ตัวเลข (ความแม่นยำ 98.85%)
+            elif digits_match and prov_match:
+                score = 98.85
+                if score > best_score:
+                    best_score = score
                     best_match = p
 
-        if best_match and best_score >= 75.0:
+            # 4. ตัวเลขตรงกันอย่างสมบูรณ์ (ความแม่นยำ 95.00%)
+            elif db_digits == q_digits and len(db_digits) >= 3:
+                score = 95.00
+                if score > best_score:
+                    best_score = score
+                    best_match = p
+
+        if best_match and best_score >= 80.0:
             return {
                 "type": "plate",
                 "id": best_match["id"],

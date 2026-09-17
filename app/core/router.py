@@ -121,20 +121,22 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
                 elif target_type == "plate":
                     plate_result = await search_license_plate(image_path)
                     if plate_result:
-                        p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
-                        p_dict["detected_type"] = "plate"
-                        p_dict["detected_type_label"] = "🚗 ป้ายทะเบียนรถ"
-                        results.append(p_dict)
-                        detected_label = "🚗 ป้ายทะเบียนรถ"
+                        p_label = plate_result.get("plate_type_label", "🚗 รถยนต์ (ป้ายขาว)")
+                        detected_label = p_label
                         predicted_type = "plate"
-                        await save_search_result(
-                            request_id=request_id,
-                            result_type="license_plate",
-                            match_score=p_dict.get("score", 100.0),
-                            matched_record_id=p_dict.get("id"),
-                            details=p_dict,
-                        )
-                        break
+                        if plate_result.get("found"):
+                            p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
+                            p_dict["detected_type"] = "plate"
+                            p_dict["detected_type_label"] = p_label
+                            results.append(p_dict)
+                            await save_search_result(
+                                request_id=request_id,
+                                result_type="license_plate",
+                                match_score=p_dict.get("score", 100.0),
+                                matched_record_id=p_dict.get("id"),
+                                details=p_dict,
+                            )
+                            break
 
                 elif target_type == "face":
                     face_result = await search_face(image_path)
@@ -166,10 +168,14 @@ async def process_media(request_id: int | None, image_bytes: bytes, mode: str = 
         elif mode == "plate":
             plate_result = await search_license_plate(image_path)
             if plate_result:
-                p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
-                p_dict["detected_type"] = "plate"
-                p_dict["detected_type_label"] = "🚗 ป้ายทะเบียนรถ"
-                results.append(p_dict)
+                p_label = plate_result.get("plate_type_label", "🚗 รถยนต์ (ป้ายขาว)")
+                detected_label = p_label
+                predicted_type = "plate"
+                if plate_result.get("found"):
+                    p_dict = plate_result if isinstance(plate_result, dict) else {"type": "plate", "plate_text": plate_result}
+                    p_dict["detected_type"] = "plate"
+                    p_dict["detected_type_label"] = p_label
+                    results.append(p_dict)
 
         elif mode == "idcard":
             id_card_result = await search_id_card(image_path)

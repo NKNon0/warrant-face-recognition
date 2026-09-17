@@ -98,9 +98,8 @@ async def search_license_plate(image_path: str) -> dict | None:
         # ตรวจสอบภาพต้นฉบับด้วย เพื่อความแม่นยำสูงสุดหากผู้ใช้ส่งภาพครอปป้ายทะเบียนมาโดยตรง
         all_candidates = [image] + (candidate_imgs or [])
 
-        plate_type_code, plate_type_label = "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
-        if candidate_imgs and len(candidate_imgs) > 0:
-            plate_type_code, plate_type_label = classify_license_plate_type(candidate_imgs[0])
+        check_crop = candidate_imgs[0] if (candidate_imgs and len(candidate_imgs) > 0) else image
+        plate_type_code, plate_type_label = classify_license_plate_type(check_crop)
 
         # 1. High Speed Pass: PaddleOCR Engine
         paddle_ocr = get_paddleocr_engine()
@@ -120,6 +119,7 @@ async def search_license_plate(image_path: str) -> dict | None:
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:
+                            match["found"] = True
                             match["plate_type_code"] = plate_type_code
                             match["plate_type_label"] = plate_type_label
                             return match
@@ -139,11 +139,18 @@ async def search_license_plate(image_path: str) -> dict | None:
                     if len(clean_txt) >= 2:
                         match = await find_license_plate(clean_txt)
                         if match:
+                            match["found"] = True
                             match["plate_type_code"] = plate_type_code
                             match["plate_type_label"] = plate_type_label
                             return match
 
-        return None
+        return {
+            "type": "plate",
+            "found": False,
+            "plate_type_code": plate_type_code,
+            "plate_type_label": plate_type_label,
+            "message": f"ตรวจพบประเภท: {plate_type_label} แต่ไม่พบข้อมูลที่ตรงกับฐานข้อมูลหมายจับ"
+        }
     except Exception as e:
         logger.error(f"[ALPR OCR] search_license_plate error: {e}")
         return None

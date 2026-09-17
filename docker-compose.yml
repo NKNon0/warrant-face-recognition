@@ -11,6 +11,11 @@ services:
       - .env
     environment:
       - MYSQL_HOST=db
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=secret
+      - MYSQL_DB=Face_Ai
+      - TZ=Asia/Bangkok
     depends_on:
       - db
 
@@ -21,6 +26,7 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: secret
       MYSQL_DATABASE: Face_Ai
+      TZ: Asia/Bangkok
     ports:
       - "3306:3306"
     volumes:

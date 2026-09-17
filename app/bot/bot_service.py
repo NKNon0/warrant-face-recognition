@@ -1,8 +1,10 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus
+
+THAI_TZ = timezone(timedelta(hours=7))
 import socket
 import aiohttp
 import aiomysql
@@ -392,7 +394,7 @@ async def handle_callback_query(callback_query: dict):
             )
 
             # 4. ปรับเปลี่ยนการ์ดใน Telegram ของ Admin ให้แสดงสถานะอนุมัติเรียบร้อย
-            now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            now_str = datetime.now(THAI_TZ).strftime("%d/%m/%Y %H:%M:%S")
             updated_card = (
                 f"🚨 <b>ข้อมูลคำขอลงทะเบียนเข้าใช้งาน (C.I.A.S.)</b>\n\n"
                 f"🎖️ <b>ยศ - ชื่อ:</b> {display_name}\n"
@@ -421,7 +423,7 @@ async def handle_callback_query(callback_query: dict):
                 f"🏢 <b>ตำแหน่ง/สังกัด:</b> {station or '-'}\n\n"
                 f"✅ <b>ท่านได้รับสิทธิ์เข้าใช้งานระบบสืบค้น AI เต็มรูปแบบ:</b>\n"
                 f" • 👤 <b>ค้นหาใบหน้า</b> ➔ ส่งภาพใบหน้าเพื่อตรวจจับและเทียบหมายจับ\n"
-                f" • 🚗 <b>ค้นหาป้ายทะเบียน</b> ➔ ส่งภาพรถเพื่อตรวจจับป้ายทะเบียน 4 หมวด\n"
+                f" • 🚗 <b>ค้นหาป้ายทะเบียน</b> ➔ ส่งภาพรถเพื่อตรวจจับป้ายทะเบียน (รองรับป้ายขาวรถยนต์และรถจักรยานยนต์)\n"
                 f" • 🪪 <b>ค้นหาบัตรประชาชน</b> ➔ ตรวจสอบเลข 13 หลักและชื่อผู้ต้องหา\n\n"
                 f"<i>ท่านสามารถส่งรูปภาพเข้ามาในแชทนี้ได้ทันทีครับ 🚀</i>"
             )
@@ -455,7 +457,7 @@ async def handle_callback_query(callback_query: dict):
             )
 
             # 4. อัปเดตการ์ดเป็นสถานะระงับสิทธิ์ พร้อมปุ่มเปิดอนุมัติอีกครั้ง
-            now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            now_str = datetime.now(THAI_TZ).strftime("%d/%m/%Y %H:%M:%S")
             updated_card = (
                 f"🚨 <b>ข้อมูลคำขอลงทะเบียนเข้าใช้งาน (C.I.A.S.)</b>\n\n"
                 f"🎖️ <b>ยศ - ชื่อ:</b> {display_name}\n"
@@ -686,7 +688,7 @@ async def handle_telegram_update(update: dict):
                 f"📸 <b>วิธีใช้งาน:</b>\n"
                 f"ส่งรูปภาพเข้ามาในแชทนี้ได้ทันทีครับ โดย AI จะทำการแยกประเภทอัตโนมัติ:\n"
                 f" • 👤 <b>ใบหน้าบุคคล</b> ➔ ค้นหาเปรียบเทียบใบหน้าผู้ต้องหาตามหมายจับ (ระบบ 512D ArcFace)\n"
-                f" • 🚗 <b>ป้ายทะเบียนรถ</b> ➔ ตรวจสอบรถชนแล้วหนี / รถผิดกฎหมาย / รถ พ.ร.บ ขาด (4 หมวด)\n"
+                f" • 🚗 <b>ป้ายทะเบียนรถ</b> ➔ ตรวจสอบรถชนแล้วหนี / รถผิดกฎหมาย / รถ พ.ร.บ ขาด (ป้ายขาวรถยนต์และรถจักรยานยนต์)\n"
                 f" • 🪪 <b>บัตรประชาชน</b> ➔ ตรวจสอบเลขประจำตัว 13 หลักและชื่อผู้ต้องหา\n\n"
                 f"<i>ท่านสามารถถ่ายภาพหรือแนบรูปภาพส่งเข้ามาได้ตลอดเวลาครับ 🚀</i>"
             )
@@ -751,7 +753,7 @@ async def handle_telegram_update(update: dict):
                 pass
         return
 
-    detected_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    detected_at = datetime.now(THAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     try:
         result_data = await process_media(request_id, image_bytes, mode="auto")
     except Exception as ex:
@@ -784,11 +786,19 @@ async def handle_telegram_update(update: dict):
             pass
 
     if not result_data.get("found"):
-        not_found_msg = (
-            f"❌ <b>ไม่พบข้อมูลในฐานข้อมูลหมายจับ</b>\n"
-            f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> {detected_type_label}\n\n"
-            f"ℹ️ ตรวจสอบแล้วไม่พบข้อมูลประวัติหมายจับ ยานพาหนะเฝ้าระวัง หรือข้อมูลผู้ต้องสงสัยในระบบ"
-        )
+        custom_reason = result_data.get("message")
+        if custom_reason:
+            not_found_msg = (
+                f"ℹ️ <b>ผลการตรวจสอบ</b>\n"
+                f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> {detected_type_label}\n\n"
+                f"{custom_reason}"
+            )
+        else:
+            not_found_msg = (
+                f"❌ <b>ไม่พบข้อมูลในฐานข้อมูลหมายจับ</b>\n"
+                f"🔍 <b>ประเภทภาพที่ AI ตรวจพบ:</b> {detected_type_label}\n\n"
+                f"ℹ️ ตรวจสอบแล้วไม่พบข้อมูลประวัติหมายจับ ยานพาหนะเฝ้าระวัง หรือข้อมูลผู้ต้องสงสัยในระบบ"
+            )
         await send_message(chat_id, not_found_msg)
         return
 

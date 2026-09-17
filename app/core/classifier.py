@@ -97,9 +97,8 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         has_id_keyword = any(k in ocr_text for k in id_keywords)
         has_13_digits = bool(extract_id_number(ocr_text))
 
-        # หากมีคีย์เวิร์ดบัตรประชาชน หรือมีเลขประจำตัวประชาชน 13 หลัก ให้เป็น ID Card ทันที
-        # แม้ว่าบนบัตรจะมีรูปหน้าตรงอยู่ก็ตาม
-        if has_id_keyword or has_13_digits:
+        # หากมีคีย์เวิร์ดบัตรประชาชนโดยตรง เช่น บัตรประจำตัวประชาชน, วันออกบัตร, เกิดวันที่ -> เป็น ID Card ทันที
+        if has_id_keyword:
             return "idcard", 0.99
 
         # =========================================================================
@@ -110,7 +109,7 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
         digits_in_text = re.findall(r"\d+", plate_text_clean)
         thai_in_text = re.findall(r"[ก-ฮ]+", plate_text_clean)
 
-        # ตรวจหาแพทเทิร์นป้ายทะเบียนไทย เช่น 1กย 889, กย 889, ขนษ 660, 4กฆ 1819
+        # ตรวจหาแพทเทิร์นป้ายทะเบียนไทย เช่น 1กย 889, กย 889, ขนษ 660, 4กฆ 1819, 3กฒ 161
         plate_pattern_match = bool(re.search(r'[0-9]?[ก-ฮ]{1,3}\s*[0-9]{1,4}', ocr_text))
 
         # ก) ตรวจสอบจากข้อความ OCR (มีจังหวัด + ตัวเลข หรือ ตรงตามแพทเทิร์นป้าย)
@@ -136,6 +135,10 @@ def classify_image_type(image_path: str) -> tuple[str, float]:
 
         if has_province and thai_in_text:
             return "plate", 0.92
+
+        # หากไม่มีลักษณะของป้ายทะเบียนรถ แต่พบเลข 13 หลักที่ถูกต้องตามโครงสร้าง
+        if has_13_digits:
+            return "idcard", 0.95
 
         # =========================================================================
         # ส่วนที่ 3: ตรวจสอบใบหน้าบุคคล (Face Recognition)

@@ -2,7 +2,9 @@ import os
 import logging
 from pathlib import Path
 from urllib.parse import quote_plus
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+THAI_TZ = timezone(timedelta(hours=7))
 from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -84,7 +86,7 @@ async def handle_registration(
 
     # ส่งข้อความแจ้งเตือนหา Admin ใน Telegram ทันที
     try:
-        now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        now_str = datetime.now(THAI_TZ).strftime("%d/%m/%Y %H:%M:%S")
         admin_text = (
             f"🚨 <b>มีคำขอลงทะเบียนเข้าใช้งานระบบใหม่! (C.I.A.S.)</b>\n\n"
             f"🎖️ <b>ยศ - ชื่อ:</b> {rank_title} {first_name}\n"

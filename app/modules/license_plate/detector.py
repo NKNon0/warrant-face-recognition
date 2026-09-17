@@ -82,17 +82,27 @@ def preprocess_license_plate_image(img_bgr: np.ndarray) -> list[np.ndarray]:
                 bh = by2 - by1
 
                 if bw > 30 and bh > 15:
-                    pad_x = int(bw * 0.04)
-                    pad_y = int(bh * 0.04)
+                    pad_x = int(bw * 0.05)
+                    pad_y = int(bh * 0.05)
                     cx1 = max(0, bx1 - pad_x)
                     cy1 = max(0, by1 - pad_y)
                     cx2 = min(w_work, bx2 + pad_x)
                     cy2 = min(h_work, by2 + pad_y)
 
-                    plate_roi = work_img[cy1:cy2, cx1:cx2]
+                    # คร็อปจากภาพต้นฉบับความละเอียดสูง (Original High-Res) เพื่อรักษาความคมชัดของตัวเลขและตัวอักษร
+                    if w_orig > 900:
+                        inv_s = float(w_orig) / 900.0
+                        orig_cx1 = max(0, int(cx1 * inv_s))
+                        orig_cy1 = max(0, int(cy1 * inv_s))
+                        orig_cx2 = min(w_orig, int(cx2 * inv_s))
+                        orig_cy2 = min(h_orig, int(cy2 * inv_s))
+                        plate_roi = img_bgr[orig_cy1:orig_cy2, orig_cx1:orig_cx2]
+                    else:
+                        plate_roi = work_img[cy1:cy2, cx1:cx2]
+
                     if plate_roi.size > 0:
-                        rh = 140
-                        rw = max(100, int(float(plate_roi.shape[1]) * (140.0 / float(plate_roi.shape[0]))))
+                        rh = 180
+                        rw = max(120, int(float(plate_roi.shape[1]) * (180.0 / float(plate_roi.shape[0]))))
                         plate_resized = cv2.resize(plate_roi, (rw, rh), interpolation=cv2.INTER_CUBIC)
 
                         plate_gray = cv2.cvtColor(plate_resized, cv2.COLOR_BGR2GRAY)
@@ -123,46 +133,26 @@ def preprocess_license_plate_image(img_bgr: np.ndarray) -> list[np.ndarray]:
 
 def classify_license_plate_type(plate_crop_bgr: np.ndarray) -> tuple[str, str]:
     """
-    จำแนกประเภทป้ายทะเบียน 4 รูปแบบตามขอบเขตงานวิจัย (4-Class License Plate Classification):
-    1. 'car_normal'        -> 🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)
-    2. 'motorcycle_normal' -> 🛵 รถจักรยานยนต์ - ป้ายขาวปกติ (Motorcycle - Normal Plate)
-    3. 'car_red'           -> 🚗 รถยนต์ - ป้ายแดง (Car - Red Plate)
-    4. 'motorcycle_red'    -> 🛵 รถจักรยานยนต์ - ป้ายแดง (Motorcycle - Red Plate)
+    จำแนกประเภทป้ายทะเบียนตามข้อกำหนด: รองรับเฉพาะป้ายขาวของรถยนต์และรถจักรยานยนต์ (ไม่ต้องมีป้ายแดง)
+    1. 'car_normal'        -> 🚗 รถยนต์ (ป้ายขาว)
+    2. 'motorcycle_normal' -> 🛵 รถจักรยานยนต์ (ป้ายขาว)
     คืนค่าเป็น (type_code, type_label_th)
+
+    จำแนกจากสัดส่วนของแผ่นป้าย (Aspect Ratio) โดยตรง ไม่ใช้การตรวจสอบสีเพื่อป้องกันความผิดพลาด
+    เช่น กรณีตัวรถเป็นสีแดง แสงสะท้อนสีแดง หรือสีผิวของมือขณะถือแผ่นป้าย
     """
     if plate_crop_bgr is None or plate_crop_bgr.size == 0:
-        return "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
+        return "car_normal", "🚗 รถยนต์ (ป้ายขาว)"
 
     h, w = plate_crop_bgr.shape[:2]
     aspect_ratio = float(w) / float(h) if h > 0 else 2.0
 
-    # ตรวจสอบสีพื้นหลังป้ายทะเบียน (HSV Color Space)
-    # ป้ายแดง: สีแดงมี Hue ในช่วง [0, 12] และ [165, 180], Saturation > 60, Value > 60
-    hsv = cv2.cvtColor(plate_crop_bgr, cv2.COLOR_BGR2HSV)
-    lower_red1 = np.array([0, 60, 60])
-    upper_red1 = np.array([12, 255, 255])
-    lower_red2 = np.array([165, 60, 60])
-    upper_red2 = np.array([180, 255, 255])
-
-    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
-    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-    red_mask = mask1 | mask2
-
-    red_pixel_ratio = float(np.count_nonzero(red_mask)) / float(h * w) if (h * w) > 0 else 0.0
-    is_red_plate = (red_pixel_ratio >= 0.20)
-
-    # ตรวจสอบประเภทยานพาหนะจากสัดส่วนป้าย (Aspect Ratio)
-    # ป้ายรถยนต์ (สี่เหลี่ยมผืนผ้าแนวยาว): Aspect Ratio >= 1.60 (มาตรฐาน ~ 2.0 - 2.5)
-    # ป้ายรถจักรยานยนต์ (ทรงเกือบจัตุรัส / 3 บรรทัด): Aspect Ratio < 1.60 (มาตรฐาน ~ 1.0 - 1.4)
-    is_motorcycle = (aspect_ratio < 1.60)
-
-    if is_motorcycle:
-        if is_red_plate:
-            return "motorcycle_red", "🛵 รถจักรยานยนต์ - ป้ายแดง (Motorcycle - Red Plate)"
-        else:
-            return "motorcycle_normal", "🛵 รถจักรยานยนต์ - ป้ายขาวปกติ (Motorcycle - Normal Plate)"
+    # ตรวจสอบประเภทยานพาหนะจากสัดส่วนป้าย (Aspect Ratio):
+    # ป้ายรถยนต์ (สี่เหลี่ยมผืนผ้าแนวยาว): Aspect Ratio >= 1.60 (มาตรฐานสากล ~ 2.0 - 2.5)
+    # ป้ายรถจักรยานยนต์ (ทรงเกือบจัตุรัส 3 บรรทัด): Aspect Ratio < 1.60 (มาตรฐาน ~ 1.0 - 1.4)
+    if aspect_ratio < 1.60:
+        return "motorcycle_normal", "🛵 รถจักรยานยนต์ (ป้ายขาว)"
     else:
-        if is_red_plate:
-            return "car_red", "🚗 รถยนต์ - ป้ายแดง (Car - Red Plate)"
-        else:
-            return "car_normal", "🚗 รถยนต์ - ป้ายขาวปกติ (Car - Normal Plate)"
+        return "car_normal", "🚗 รถยนต์ (ป้ายขาว)"
+
+
