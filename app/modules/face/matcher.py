@@ -204,11 +204,30 @@ def rebuild_face_cache_sync(profiles: list[dict]):
     return None, None
 
 
+def calibrate_similarity_score(sim: float) -> float:
+    """
+    แปลงค่า Cosine Similarity ของ InsightFace ArcFace 512D เข้าสู่สเกลความเชื่อมั่น
+    - raw sim >= 0.55: 90.0% - 99.8% (ความแม่นยำสูงมาก)
+    - raw sim 0.45 <= sim < 0.55: 80.0% - 89.9% (เกณฑ์ยอมรับได้)
+    - raw sim < 0.45: < 80.0% (ต่ำกว่าเกณฑ์)
+    """
+    if sim >= 0.70:
+        return round(min(99.95, 98.0 + (sim - 0.70) / 0.30 * 1.95), 2)
+    elif sim >= 0.55:
+        return round(90.0 + (sim - 0.55) / (0.70 - 0.55) * 8.0, 2)
+    elif sim >= 0.45:
+        return round(80.0 + (sim - 0.45) / (0.55 - 0.45) * 9.9, 2)
+    elif sim >= 0.30:
+        return round(50.0 + (sim - 0.30) / (0.45 - 0.30) * 29.9, 2)
+    else:
+        return round(max(5.0, sim * 100 * 1.2), 2)
+
+
 async def search_face(image_path: str) -> dict | None:
     """
     ระบบค้นหาเปรียบเทียบใบหน้าบุคคลกับฐานข้อมูลหมายจับ (High-Performance Vectorized Face Matcher)
-    Pass 1: Qdrant Vector DB HNSW (< 5ms) หากเปิดใช้งาน
-    Pass 2: In-Memory NumPy Vectorized Matrix (< 1ms) ป้องกันการอ่านดิสก์ซ้ำซ้อน และกำจัดปัญหา AI เพี้ยน
+    - Best Match: เกณฑ์ยอมรับได้ >= 80.0% (ความแม่นยำสูง 90.0% - 99.9%)
+    - Secondary Candidates: บุคคลที่มีโครงหน้าใกล้เคียงรองลงมา สูงสุด 5 คน (เฉพาะที่ >= 80.0%)
     """
     try:
         image = cv2_imread_unicode(image_path)
@@ -231,44 +250,7 @@ async def search_face(image_path: str) -> dict | None:
             return {"type": "no_face", "message": "เวกเตอร์ใบหน้าไม่ถูกต้อง"}
         query_norm = (query_embedding / q_norm_val).astype(np.float32)
 
-        # ----------------------------------------------------
-        # Pass 1: Qdrant HNSW Vector Search (ถ้ามี Container เปิดอยู่)
-        # ----------------------------------------------------
-        try:
-            vector_results = search_similar_faces(query_norm.tolist(), limit=1, score_threshold=0.65)
-            if vector_results:
-                top_hit = vector_results[0]
-                score_sim = top_hit["score"]
-                profile_id = top_hit["id"]
-                payload = top_hit.get("payload", {})
-                display_score = round(min(99.95, max(85.0, (score_sim - 0.50) / 0.50 * 20.0 + 80.0)), 2)
-
-                p_name = payload.get("person_name", "-")
-                raw_photo = payload.get("photo_url", "")
-                raw_warrant = payload.get("warrant_url", "")
-                photo_file = resolve_photo_path(p_name, raw_photo)
-                warrant_file = resolve_warrant_path(p_name, photo_file, raw_warrant)
-
-                return {
-                    "found": True,
-                    "type": "face",
-                    "id": profile_id,
-                    "person_name": p_name,
-                    "id_number": payload.get("id_number", "-"),
-                    "detail": payload.get("detail", "-"),
-                    "station": payload.get("station", "-"),
-                    "court": payload.get("court", "-"),
-                    "photo_url": photo_file,
-                    "warrant_url": warrant_file,
-                    "score": display_score,
-                    "engine": "Qdrant HNSW 512D ArcFace",
-                }
-        except Exception as q_ex:
-            logger.debug(f"[Face Matcher] Qdrant note: {q_ex}")
-
-        # ----------------------------------------------------
-        # Pass 2: High-Speed In-Memory NumPy Vectorized Matrix (< 1ms)
-        # ----------------------------------------------------
+        # โหลดเวกเตอร์ใบหน้าทั้งหมดขึ้น RAM
         matrix, metadata = get_face_cache()
 
         if matrix is None:
@@ -287,13 +269,48 @@ async def search_face(image_path: str) -> dict | None:
         if matrix is not None and metadata is not None and len(matrix) > 0:
             # คำนวณ Cosine Similarity พร้อมกันทั้งตารางใน 1 คำสั่ง (< 1 มิลลิวินาที)
             sim_scores = np.dot(matrix, query_norm)
-            best_idx = int(np.argmax(sim_scores))
-            best_sim = float(sim_scores[best_idx])
+            sorted_indices = np.argsort(sim_scores)[::-1]
 
-            # เกณฑ์ความคล้ายคลึงมาตรฐาน ArcFace (Threshold >= 0.48):
-            # มีความแม่นยำสูงมาก ตัดคนไม่เกี่ยว (ความคล้าย < 0.35) และจับคู่ผู้ต้องหาจริงได้อย่างแม่นยำสูง
-            if best_sim >= 0.48:
-                display_score = round(min(99.95, max(75.0, (best_sim - 0.40) / 0.60 * 24.95 + 75.0)), 2)
+            best_idx = int(sorted_indices[0])
+            best_sim = float(sim_scores[best_idx])
+            best_display_score = calibrate_similarity_score(best_sim)
+
+            # สกัดบุคคลที่มีโครงหน้าใกล้เคียงรองลงมา (สูงสุด 5 คน เฉพาะที่ >= 80.0%)
+            secondary_candidates = []
+            for r_idx in sorted_indices[1:]:
+                r_sim = float(sim_scores[r_idx])
+                r_score = calibrate_similarity_score(r_sim)
+
+                # ถ้าคนรองคะแนนต่ำกว่า 80% ให้หยุดทันที (เพราะเรียงจากมากไปน้อยอยู่แล้ว)
+                if r_score < 80.0:
+                    break
+
+                p_name_sec = str(metadata["names"][r_idx])
+                raw_photo_sec = str(metadata["photo_urls"][r_idx])
+                raw_warrant_sec = str(metadata["warrant_urls"][r_idx]) if "warrant_urls" in metadata else ""
+                photo_file_sec = resolve_photo_path(p_name_sec, raw_photo_sec)
+                warrant_file_sec = resolve_warrant_path(p_name_sec, photo_file_sec, raw_warrant_sec)
+
+                secondary_candidates.append({
+                    "rank": len(secondary_candidates) + 1,
+                    "id": int(metadata["ids"][r_idx]),
+                    "person_name": p_name_sec,
+                    "id_number": str(metadata["id_numbers"][r_idx]) if "id_numbers" in metadata else "-",
+                    "detail": str(metadata["details"][r_idx]),
+                    "station": str(metadata["stations"][r_idx]),
+                    "court": str(metadata["courts"][r_idx]),
+                    "photo_url": photo_file_sec,
+                    "warrant_url": warrant_file_sec,
+                    "score": r_score,
+                    "raw_sim": round(r_sim, 4),
+                })
+                if len(secondary_candidates) >= 5:
+                    break
+
+            has_similar = len(secondary_candidates) > 0
+
+            # เกณฑ์ความคล้ายคลึงยอมรับได้ (Threshold >= 80.0% ซึ่งตรงกับ raw_sim >= 0.45)
+            if best_display_score >= 80.0:
                 p_name = str(metadata["names"][best_idx])
                 raw_photo = str(metadata["photo_urls"][best_idx])
                 raw_warrant = str(metadata["warrant_urls"][best_idx]) if "warrant_urls" in metadata else ""
@@ -311,16 +328,22 @@ async def search_face(image_path: str) -> dict | None:
                     "court": str(metadata["courts"][best_idx]),
                     "photo_url": photo_file,
                     "warrant_url": warrant_file,
-                    "score": display_score,
-                    "engine": "InsightFace ResNet50 ArcFace (Vectorized 1ms)",
+                    "score": best_display_score,
+                    "raw_similarity": round(best_sim, 4),
+                    "engine": "InsightFace ResNet50 ArcFace 512D",
+                    "similar_candidates": secondary_candidates,
+                    "has_similar": has_similar,
                 }
 
-            # ตรวจพบใบหน้าบุคคลในภาพ แต่คะแนนไม่ถึงเกณฑ์หมายจับ (คนบริสุทธิ์)
+            # ตรวจพบใบหน้าบุคคล แต่คะแนนไม่ถึงเกณฑ์ยอมรับได้ (< 80%)
             return {
                 "found": False,
                 "type": "face",
                 "detected_face": True,
-                "message": "ตรวจพบใบหน้าบุคคล แต่ไม่พบข้อมูลประวัติหมายจับในฐานข้อมูล"
+                "score": best_display_score,
+                "similar_candidates": [],
+                "has_similar": False,
+                "message": "ตรวจพบใบหน้าบุคคล แต่ไม่พบข้อมูลประวัติหมายจับในฐานข้อมูล (ความคล้ายคลึงต่ำกว่าเกณฑ์ 80%)"
             }
 
         return None

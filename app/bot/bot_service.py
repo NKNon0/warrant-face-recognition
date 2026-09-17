@@ -9,9 +9,19 @@ import aiomysql
 from app.config import TELEGRAM_TOKEN, TELEGRAM_API, ADMIN_TELEGRAM_ID
 from app.db.mysql import get_connection
 from app.core.router import process_media
-from .formatter import format_face_result, format_plate_result, format_id_card_result
+from .formatter import (
+    format_face_result,
+    format_plate_result,
+    format_id_card_result,
+    format_similar_candidates_list,
+    format_similar_candidate_detail,
+)
 
 logger = logging.getLogger(__name__)
+
+# แคชจัดเก็บเซสชันบุคคลโครงหน้าใกล้เคียงรองลงมา (In-Memory Session Cache)
+_SIMILAR_SESSIONS: dict[str, dict] = {}
+
 
 
 def get_local_ip() -> str:
@@ -78,19 +88,21 @@ async def send_message(chat_id: int, text: str, reply_markup: dict = None):
         return {"ok": False, "error": str(e)}
 
 
-async def answer_callback_query(callback_query_id: str, text: str, show_alert: bool = False):
-    """ตอบรับ Callback Query จาก Inline Buttons พร้อมแจ้งเตือนแบบ Modal Alert"""
+async def answer_callback_query(callback_query_id: str, text: str = "", show_alert: bool = False):
+    """ตอบรับ Callback Query จาก Inline Buttons (หากไม่ระบุ text จะไม่มี Popup เด้งขึ้นมา)"""
     try:
         session = await get_telegram_session()
         url = f"{TELEGRAM_API}/answerCallbackQuery"
         payload = {
             "callback_query_id": callback_query_id,
-            "text": text,
-            "show_alert": show_alert,
         }
+        if text:
+            payload["text"] = text
+            payload["show_alert"] = show_alert
         await session.post(url, json=payload)
     except Exception as e:
         logger.error(f"answer_callback_query error: {e}")
+
 
 
 async def edit_message_text(chat_id: int, message_id: int, text: str, reply_markup: dict = None):
@@ -115,14 +127,14 @@ async def edit_message_text(chat_id: int, message_id: int, text: str, reply_mark
         logger.error(f"edit_message_text error: {e}")
 
 
-async def send_photo(chat_id: int, photo_path: str, caption: str):
-    """ส่งรูปภาพพร้อม Caption ไปยัง Telegram (รองรับ Cross-Platform Windows & Linux Docker)"""
+async def send_photo(chat_id: int, photo_path: str, caption: str, reply_markup: dict = None):
+    """ส่งรูปภาพพร้อม Caption และปุ่ม Inline Keyboard ไปยัง Telegram (รองรับ Cross-Platform Windows & Linux Docker)"""
     try:
         from app.modules.face.matcher import normalize_path
         actual_path = normalize_path(photo_path) or photo_path
         if not os.path.exists(actual_path) or not os.path.isfile(actual_path):
             logger.error(f"[Telegram] send_photo file not found: {photo_path} (resolved: {actual_path})")
-            await send_message(chat_id, caption)
+            await send_message(chat_id, caption, reply_markup=reply_markup)
             return {"ok": False, "error": "file_not_found"}
 
         with open(actual_path, "rb") as f:
@@ -135,6 +147,8 @@ async def send_photo(chat_id: int, photo_path: str, caption: str):
         form.add_field("chat_id", str(chat_id))
         form.add_field("caption", caption)
         form.add_field("parse_mode", "HTML")
+        if reply_markup:
+            form.add_field("reply_markup", json.dumps(reply_markup))
         form.add_field("photo", photo_bytes, filename=f"photo{ext}", content_type=mime)
 
         session = await get_telegram_session()
@@ -143,12 +157,13 @@ async def send_photo(chat_id: int, photo_path: str, caption: str):
             res_data = await resp.json()
             if not res_data.get("ok"):
                 logger.error(f"[Telegram] send_photo returned not ok: {res_data}")
-                await send_message(chat_id, caption)
+                await send_message(chat_id, caption, reply_markup=reply_markup)
             return res_data
     except Exception as e:
         logger.error(f"send_photo error: {e}")
-        await send_message(chat_id, caption)
+        await send_message(chat_id, caption, reply_markup=reply_markup)
         return {"ok": False, "error": str(e)}
+
 
 
 async def delete_message(chat_id: int, message_id: int) -> bool:
@@ -473,6 +488,98 @@ async def handle_callback_query(callback_query: dict):
             admin_confirm = f"🔒 <b>ดำเนินการสำเร็จ:</b> ได้ระงับสิทธิ์ของ <b>{display_name}</b> เรียบร้อยแล้ว"
             await send_message(chat_id, admin_confirm)
 
+        elif data.startswith("sim_list_"):
+            session_id = data.replace("sim_list_", "")
+            session_data = _SIMILAR_SESSIONS.get(session_id)
+            if not session_data:
+                await answer_callback_query(cb_id)
+                await send_message(chat_id, "ℹ️ ข้อมูลเซสชันหมดอายุแล้ว กรุณาส่งภาพใหม่อีกครั้งครับ")
+                return
+
+            candidates = session_data.get("candidates", [])
+            # ตามคำสั่งของผู้ใช้: ตัดป๊อปอัปออก ไม่ต้องมีป๊อปอัปเด้ง แต่ส่งตรงไปยังแชททันที
+            if not candidates:
+                await answer_callback_query(cb_id)
+                await send_message(chat_id, "ℹ️ <b>ไม่มีบุคคลหน้าคล้าย</b> (ไม่มีบุคคลอื่นที่มีความคล้ายคลึงถึงเกณฑ์ 80% ในระบบ)")
+                return
+
+            await answer_callback_query(cb_id)
+            list_text = format_similar_candidates_list(candidates)
+
+            cand_buttons = []
+            for c in candidates:
+                rank_num = c.get("rank", 1)
+                c_name = c.get("person_name", "-")
+                c_score = c.get("score", 0.0)
+                cand_buttons.append([
+                    {
+                        "text": f"👤 ดูภาพอันดับ {rank_num}: {c_name} ({c_score:.1f}%)",
+                        "callback_data": f"sim_view_{session_id}_{rank_num}"
+                    }
+                ])
+            cand_markup = {"inline_keyboard": cand_buttons}
+            await send_message(chat_id, list_text, reply_markup=cand_markup)
+
+        elif data.startswith("sim_view_"):
+            parts = data.replace("sim_view_", "").split("_")
+            if len(parts) < 2:
+                await answer_callback_query(cb_id)
+                await send_message(chat_id, "❌ คำขอไม่ถูกต้อง")
+                return
+            session_id = parts[0]
+            target_rank = parts[1]
+
+            session_data = _SIMILAR_SESSIONS.get(session_id)
+            if not session_data:
+                await answer_callback_query(cb_id)
+                await send_message(chat_id, "ℹ️ ข้อมูลเซสชันหมดอายุแล้ว")
+                return
+
+            candidates = session_data.get("candidates", [])
+            target_candidate = None
+            for c in candidates:
+                if str(c.get("rank")) == str(target_rank):
+                    target_candidate = c
+                    break
+
+            if not target_candidate:
+                await answer_callback_query(cb_id)
+                await send_message(chat_id, "❌ ไม่พบข้อมูลบุคคลนี้ในระบบ")
+                return
+
+            await answer_callback_query(cb_id)
+            detail_caption = format_similar_candidate_detail(target_candidate)
+
+            photo_file = target_candidate.get("photo_url")
+            warrant_file = target_candidate.get("warrant_url")
+
+            from app.modules.face.matcher import normalize_path
+            actual_p = normalize_path(photo_file) if photo_file else None
+            actual_w = normalize_path(warrant_file) if warrant_file else None
+
+            p_exists = actual_p and os.path.exists(actual_p)
+            w_exists = actual_w and os.path.exists(actual_w)
+
+            back_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "⬅️ ย้อนกลับไปดูรายชื่อโครงหน้าใกล้เคียง", "callback_data": f"sim_list_{session_id}"}
+                    ]
+                ]
+            }
+
+            if p_exists and w_exists:
+                await send_media_group(chat_id, [actual_p, actual_w], detail_caption)
+                await send_message(chat_id, "<i>เลือกดำเนินการ:</i>", reply_markup=back_markup)
+            elif p_exists:
+                await send_photo(chat_id, actual_p, detail_caption, reply_markup=back_markup)
+            elif w_exists:
+                await send_photo(chat_id, actual_w, detail_caption, reply_markup=back_markup)
+            else:
+                await send_message(chat_id, detail_caption, reply_markup=back_markup)
+
+
+
     except Exception as e:
         logger.error(f"Error handling callback_query {data}: {e}", exc_info=True)
         await answer_callback_query(cb_id, f"❌ เกิดข้อผิดพลาด: {e}", show_alert=True)
@@ -692,6 +799,25 @@ async def handle_telegram_update(update: dict):
             photo_file = item.get("photo_url")
             warrant_file = item.get("warrant_url")
             person_name = item.get("person_name", "")
+            secondary_candidates = item.get("similar_candidates", [])
+
+            # บันทึกเซสชันสำหรับการกดดูบุคคลหน้าใกล้เคียงรองลงไป
+            import time
+            now_ts = int(time.time())
+            session_id = f"{chat_id}_{now_ts}"
+            _SIMILAR_SESSIONS[session_id] = {
+                "candidates": secondary_candidates,
+                "created_at": now_ts,
+                "best_name": person_name,
+            }
+
+            similar_btn_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "👥 กดดูบุคคลหน้าใกล้เคียงเพิ่มเติม", "callback_data": f"sim_list_{session_id}"}
+                    ]
+                ]
+            }
 
             # ตรวจสอบและ resolve เส้นทางรูปถ่ายและหมายจับให้สมบูรณ์ (Safety Fallback)
             if not warrant_file or not os.path.exists(warrant_file):
@@ -726,12 +852,19 @@ async def handle_telegram_update(update: dict):
             if p_exists and w_exists:
                 # ส่งเป็นเซ็ทอัลบั้มภาพคู่ 2 ภาพ (รูปหน้าตรง + รูปเอกสารหมายจับจริง) ในเซ็ทข้อความเดียว
                 await send_media_group(chat_id, [actual_p, actual_w], caption)
+                await send_message(
+                    chat_id,
+                    "👥 <b>บุคคลโครงหน้าใกล้เคียงเพิ่มเติม</b>",
+                    reply_markup=similar_btn_markup,
+                )
+
             elif p_exists:
-                await send_photo(chat_id, actual_p, caption)
+                await send_photo(chat_id, actual_p, caption, reply_markup=similar_btn_markup)
             elif w_exists:
-                await send_photo(chat_id, actual_w, caption)
+                await send_photo(chat_id, actual_w, caption, reply_markup=similar_btn_markup)
             else:
-                await send_message(chat_id, caption)
+                await send_message(chat_id, caption, reply_markup=similar_btn_markup)
+
 
         elif item_type == "plate":
             plate_msg = format_plate_result(item, detected_at)
